@@ -32,26 +32,78 @@ def simplify_feature_name(feature_name: str) -> str:
     return feature_name.replace("num__", "").replace("cat__", "")
 
 
+def pretty_feature_name(feature_name: str) -> str:
+    labels = {
+        "idade": "Idade",
+        "inde_22": "INDE 2022",
+        "inde_23": "INDE 2023",
+        "inde_ano": "INDE atual",
+        "ian": "IAN",
+        "ida": "IDA",
+        "ieg": "IEG",
+        "iaa": "IAA",
+        "ips": "IPS",
+        "ipp": "IPP",
+        "ipv": "IPV",
+        "defasagem": "Defasagem",
+        "nota_matematica": "Nota de matematica",
+        "nota_portugues": "Nota de portugues",
+        "nota_ingles": "Nota de ingles",
+        "media_notas": "Media de notas",
+        "media_comportamental": "Media comportamental",
+        "desalinhamento_autoavaliacao": "Desalinhamento de autoavaliacao",
+        "delta_inde_hist": "Delta historico de INDE",
+        "genero": "Genero",
+        "instituicao_ensino": "Instituicao de ensino",
+        "fase_programa": "Fase do programa",
+        "turma": "Turma",
+        "pedra_ano": "Pedra do ano",
+        "ativo_inativo": "Status ativo",
+    }
+    normalized = simplify_feature_name(feature_name)
+    return labels.get(normalized, normalized.replace("_", " ").strip().title())
+
+
 def coerce_numeric_series(series: pd.Series) -> pd.Series:
     cleaned = (
         series.astype(str)
         .str.replace("%", "", regex=False)
         .str.replace(",", ".", regex=False)
         .str.strip()
-        .replace({"": np.nan, "nan": np.nan, "None": np.nan, "<NA>": np.nan})
+        .replace({"": np.nan, "nan": np.nan, "None": np.nan, "<NA>": np.nan, "INCLUIR": np.nan, "incluir": np.nan})
     )
     return pd.to_numeric(cleaned, errors="coerce")
 
 
-def classify_risk(probability: float) -> str:
-    if probability < 0.33:
+def normalize_age_series(series: pd.Series) -> pd.Series:
+    numeric_age = coerce_numeric_series(series)
+    date_values = pd.to_datetime(series, errors="coerce")
+    age_from_date = np.where(
+        date_values.notna() & (date_values.dt.year == 1900) & (date_values.dt.month == 1),
+        date_values.dt.day,
+        np.nan,
+    )
+    result = pd.Series(numeric_age, index=series.index)
+    mask = result.isna() & ~pd.isna(age_from_date)
+    result.loc[mask] = age_from_date[mask]
+    return result.where(result.between(6, 30))
+
+
+def classify_risk(probability: float, risk_bands: dict | None = None) -> str:
+    risk_bands = risk_bands or {}
+    low_max = float(risk_bands.get("baixo_max", 0.33))
+    high_min = float(risk_bands.get("alto_min", 0.66))
+    if probability < low_max:
         return "Baixo"
-    if probability < 0.66:
+    if probability < high_min:
         return "Moderado"
     return "Alto"
 
 
-def build_gauge(probability: float) -> go.Figure:
+def build_gauge(probability: float, threshold: float, risk_bands: dict | None = None) -> go.Figure:
+    risk_bands = risk_bands or {}
+    low_max = float(risk_bands.get("baixo_max", 0.33))
+    high_min = float(risk_bands.get("alto_min", 0.66))
     value = float(probability * 100)
     fig = go.Figure(
         go.Indicator(
@@ -63,14 +115,14 @@ def build_gauge(probability: float) -> go.Figure:
                 "axis": {"range": [0, 100]},
                 "bar": {"color": "black"},
                 "steps": [
-                    {"range": [0, 33], "color": "#2ca02c"},
-                    {"range": [33, 66], "color": "#ffbf00"},
-                    {"range": [66, 100], "color": "#d62728"},
+                    {"range": [0, low_max * 100], "color": "#2ca02c"},
+                    {"range": [low_max * 100, high_min * 100], "color": "#ffbf00"},
+                    {"range": [high_min * 100, 100], "color": "#d62728"},
                 ],
                 "threshold": {
                     "line": {"color": "red", "width": 4},
                     "thickness": 0.8,
-                    "value": value,
+                    "value": float(threshold * 100),
                 },
             },
         )
@@ -115,10 +167,11 @@ def alias_map() -> dict[str, list[str]]:
     }
 
 
-def map_uploaded_columns(raw_df: pd.DataFrame, required_columns: list[str]) -> pd.DataFrame:
+def map_uploaded_columns(raw_df: pd.DataFrame, required_columns: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
     normalized_lookup = {normalize_column_name(c): c for c in raw_df.columns}
     aliases = alias_map()
     mapped = pd.DataFrame(index=raw_df.index)
+    report_rows = []
 
     for target_col in required_columns:
         possible_names = aliases.get(target_col, [target_col])
@@ -129,7 +182,10 @@ def map_uploaded_columns(raw_df: pd.DataFrame, required_columns: list[str]) -> p
                 chosen_source = normalized_lookup[normalized_name]
                 break
         mapped[target_col] = raw_df[chosen_source] if chosen_source else np.nan
-    return mapped
+        report_rows.append({"feature_modelo": target_col, "coluna_origem": chosen_source or "nao encontrada"})
+
+    report_df = pd.DataFrame(report_rows)
+    return mapped, report_df
 
 
 def read_uploaded_table(uploaded_file) -> pd.DataFrame:
@@ -242,6 +298,24 @@ categorical_features = bundle.get("categorical_features", [])
 default_inputs = bundle.get("default_inputs", {})
 category_options = bundle.get("category_options", {})
 healthy_thresholds = bundle.get("healthy_thresholds", {"ian": 5, "ida": 6, "ieg": 7, "ips": 7, "ipp": 7, "ipv": 7})
+risk_bands = bundle.get("risk_bands", {"baixo_max": 0.33, "alto_min": 0.66})
+training_info = bundle.get("training_info", {})
+
+st.sidebar.header("Configuracao operacional")
+operational_threshold = st.sidebar.slider(
+    "Threshold de classificacao",
+    min_value=0.05,
+    max_value=0.95,
+    value=float(round(threshold, 2)),
+    step=0.01,
+)
+st.sidebar.caption(f"Modelo treinado: {bundle.get('model_name', 'N/A')}")
+if training_info:
+    st.sidebar.caption(
+        f"Teste temporal: {training_info.get('test_years', ['N/A'])} | "
+        f"ROC-AUC: {training_info.get('best_model_test_metrics', {}).get('roc_auc', np.nan):.3f} | "
+        f"PR-AUC: {training_info.get('best_model_test_metrics', {}).get('pr_auc', np.nan):.3f}"
+    )
 
 st.sidebar.header("Entrada manual de 1 aluno")
 manual_data = {}
@@ -249,12 +323,15 @@ manual_data = {}
 for col in numeric_features:
     default_value = float(default_inputs.get(col, 0.0)) if pd.notna(default_inputs.get(col, np.nan)) else 0.0
     if col == "idade":
-        manual_data[col] = st.sidebar.slider("idade", min_value=7, max_value=30, value=int(round(default_value)), step=1)
+        manual_data[col] = st.sidebar.slider(pretty_feature_name(col), min_value=7, max_value=30, value=int(round(default_value)), step=1)
     elif col == "defasagem":
-        manual_data[col] = st.sidebar.slider("defasagem", min_value=-6, max_value=4, value=int(round(default_value)), step=1)
+        manual_data[col] = st.sidebar.slider(pretty_feature_name(col), min_value=-6, max_value=6, value=int(round(default_value)), step=1)
+    elif col.startswith("delta_") or col == "desalinhamento_autoavaliacao":
+        bounded_default = min(max(default_value, -10.0), 10.0)
+        manual_data[col] = st.sidebar.slider(pretty_feature_name(col), min_value=-10.0, max_value=10.0, value=float(round(bounded_default, 2)), step=0.1)
     else:
         bounded_default = min(max(default_value, 0.0), 10.0)
-        manual_data[col] = st.sidebar.slider(col, min_value=0.0, max_value=10.0, value=float(round(bounded_default, 2)), step=0.1)
+        manual_data[col] = st.sidebar.slider(pretty_feature_name(col), min_value=0.0, max_value=10.0, value=float(round(bounded_default, 2)), step=0.1)
 
 for col in categorical_features:
     options = category_options.get(col, [])
@@ -264,7 +341,7 @@ for col in categorical_features:
         options = [default_value] + options
     if not options:
         options = ["Nao Informado"]
-    manual_data[col] = st.sidebar.selectbox(col, options=options, index=0)
+    manual_data[col] = st.sidebar.selectbox(pretty_feature_name(col), options=options, index=0)
 
 tab_manual, tab_batch = st.tabs(["Predicao individual", "Predicao em lote (CSV/Excel)"])
 
@@ -275,20 +352,22 @@ with tab_manual:
     if predict_clicked:
         single_input = pd.DataFrame([manual_data])[feature_columns]
         probability = float(pipeline.predict_proba(single_input)[0, 1])
-        risk_level = classify_risk(probability)
-        predicted_label = int(probability >= threshold)
+        risk_level = classify_risk(probability, risk_bands=risk_bands)
+        predicted_label = int(probability >= operational_threshold)
 
         col1, col2 = st.columns([1.3, 1.0])
         with col1:
-            st.plotly_chart(build_gauge(probability), use_container_width=True)
+            st.plotly_chart(build_gauge(probability, operational_threshold, risk_bands=risk_bands), use_container_width=True)
         with col2:
             st.metric("Probabilidade", f"{probability * 100:.1f}%")
             st.metric("Nivel de risco", risk_level)
             st.metric("Classe (threshold)", f"{predicted_label}")
-            st.caption(f"Threshold do modelo: {threshold:.3f}")
+            st.caption(f"Threshold em uso: {operational_threshold:.3f} | Baixo<{risk_bands.get('baixo_max', 0.33):.2f} | Alto>={risk_bands.get('alto_min', 0.66):.2f}")
 
         st.markdown("### Principais fatores da previsao")
         factors_df = local_explanations(pipeline, single_input, healthy_thresholds, top_n=6)
+        if "fator" in factors_df.columns:
+            factors_df["fator"] = factors_df["fator"].apply(pretty_feature_name)
         st.dataframe(factors_df, use_container_width=True)
 
         st.markdown("### Acao recomendada")
@@ -307,14 +386,23 @@ with tab_batch:
             st.error(f"Nao foi possivel ler o arquivo enviado: {read_error}")
             st.stop()
 
-        mapped_batch = map_uploaded_columns(raw_batch, feature_columns)
+        mapped_batch, mapping_report = map_uploaded_columns(raw_batch, feature_columns)
+        recognized_cols = int((mapping_report["coluna_origem"] != "nao encontrada").sum())
+        st.caption(f"Mapeamento de colunas: {recognized_cols}/{len(feature_columns)} features encontradas no arquivo.")
+        with st.expander("Ver mapeamento de colunas"):
+            mapping_view = mapping_report.copy()
+            mapping_view["feature_modelo"] = mapping_view["feature_modelo"].apply(pretty_feature_name)
+            st.dataframe(mapping_view, use_container_width=True)
 
         for col in feature_columns:
             if col not in mapped_batch.columns:
                 mapped_batch[col] = default_inputs.get(col, np.nan)
 
         for col in numeric_features:
-            mapped_batch[col] = coerce_numeric_series(mapped_batch[col])
+            if col == "idade":
+                mapped_batch[col] = normalize_age_series(mapped_batch[col])
+            else:
+                mapped_batch[col] = coerce_numeric_series(mapped_batch[col])
             mapped_batch[col] = mapped_batch[col].fillna(float(default_inputs.get(col, 0.0)))
 
         for col in categorical_features:
@@ -325,8 +413,8 @@ with tab_batch:
         probs = pipeline.predict_proba(mapped_batch[feature_columns])[:, 1]
         batch_output = raw_batch.copy()
         batch_output["prob_risco"] = probs
-        batch_output["classe_risco_threshold"] = (batch_output["prob_risco"] >= threshold).astype(int)
-        batch_output["nivel_risco"] = batch_output["prob_risco"].apply(classify_risk)
+        batch_output["classe_risco_threshold"] = (batch_output["prob_risco"] >= operational_threshold).astype(int)
+        batch_output["nivel_risco"] = batch_output["prob_risco"].apply(lambda p: classify_risk(p, risk_bands=risk_bands))
 
         st.markdown("### Resultado da previsao")
         st.dataframe(batch_output.head(100), use_container_width=True)
@@ -336,6 +424,15 @@ with tab_batch:
             st.metric("Risco medio da turma", f"{batch_output['prob_risco'].mean() * 100:.1f}%")
         with col_b:
             st.metric("Alunos em risco (classe=1)", int(batch_output["classe_risco_threshold"].sum()))
+
+        st.markdown("### Alunos prioritarios (maior probabilidade)")
+        priority_cols = [c for c in ["ra", "nome", "nome_aluno", "turma", "fase_programa"] if c in batch_output.columns]
+        priority_view = (
+            batch_output.sort_values("prob_risco", ascending=False)
+            .loc[:, priority_cols + ["prob_risco", "nivel_risco", "classe_risco_threshold"]]
+            .head(20)
+        )
+        st.dataframe(priority_view, use_container_width=True)
 
         dist = batch_output["nivel_risco"].value_counts().reindex(["Baixo", "Moderado", "Alto"], fill_value=0).reset_index()
         dist.columns = ["nivel_risco", "quantidade"]
@@ -359,4 +456,4 @@ with tab_batch:
             mime="text/csv",
         )
 
-        st.info("Dica: para explicacao individual detalhada, use a aba de predicao individual.")
+        st.info("Dica: use o mapeamento de colunas para ajustar seu arquivo e reduzir preenchimento por valores padrao.")

@@ -8,6 +8,7 @@ env/
 *.pyo
 *.pyd
 *.py,cover
+__pycache__/
 
 # Tool caches
 .pytest_cache/
