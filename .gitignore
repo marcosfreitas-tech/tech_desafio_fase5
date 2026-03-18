@@ -18,10 +18,6 @@ __pycache__/
 # Jupyter
 .ipynb_checkpoints/
 
-# Generated artifacts/data
-artifacts/
-data/processed/
-data/interim/
 
 # Streamlit local secrets
 .streamlit/secrets.toml
