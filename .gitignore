@@ -31,10 +31,6 @@ Thumbs.db
 # Logs
 *.log
 
-# Local datasets/reference docs
-BASE DE DADOS PEDE 2024 - DATATHON.xlsx
-*.pdf
-
 
 tests/
 
