@@ -1,0 +1,1640 @@
+
+========================================================================================================================
+CELL 2
+========================================================================================================================
+import re
+import unicodedata
+from pathlib import Path
+import warnings
+
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.metrics import average_precision_score, roc_auc_score
+from sklearn.model_selection import train_test_split
+from IPython.display import Markdown, display
+
+warnings.filterwarnings("ignore")
+
+pd.set_option("display.max_columns", 200)
+px.defaults.template = "plotly_white"
+
+
+def detect_project_root(start=None):
+    current = (start or Path.cwd()).resolve()
+    for candidate in [current, *current.parents]:
+        if (candidate / "requirements.txt").exists() and (candidate / "app.py").exists():
+            return candidate
+    return current
+
+
+PROJECT_ROOT = detect_project_root()
+DATA_PATH = PROJECT_ROOT / "data" / "BASE DE DADOS PEDE 2024 - DATATHON.xlsx"
+PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
+PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+CONSOLIDATED_FALLBACK_PATH = PROCESSED_DIR / "pede_consolidado_2022_2024.csv"
+
+if not DATA_PATH.exists() and not CONSOLIDATED_FALLBACK_PATH.exists():
+    raise FileNotFoundError(
+        "Nenhuma fonte encontrada. Esperado: "
+        f"{DATA_PATH.resolve()} ou {CONSOLIDATED_FALLBACK_PATH.resolve()}"
+    )
+
+print("Fonte Excel preferencial:", DATA_PATH.resolve())
+print("Fallback CSV:", CONSOLIDATED_FALLBACK_PATH.resolve())
+
+
+
+========================================================================================================================
+CELL 4
+========================================================================================================================
+def normalize_column_name(col_name: str) -> str:
+    """Normaliza nome de coluna removendo acentos, espacos e simbolos."""
+    normalized = unicodedata.normalize("NFKD", str(col_name)).encode("ascii", "ignore").decode("ascii")
+    normalized = re.sub(r"[^0-9a-zA-Z]+", "_", normalized).strip("_").lower()
+    return normalized
+
+
+def clean_empty_strings(series: pd.Series) -> pd.Series:
+    """Converte strings vazias e marcadores textuais de nulo para NaN."""
+    cleaned = series.astype(str).str.strip()
+    return cleaned.replace({"": np.nan, "nan": np.nan, "None": np.nan, "<NA>": np.nan})
+
+
+def coerce_numeric_series(series: pd.Series) -> pd.Series:
+    """Converte texto numerico (virgula, percentual, etc.) para float."""
+    cleaned = (
+        series.astype(str)
+        .str.strip()
+        .str.replace("%", "", regex=False)
+        .str.replace(",", ".", regex=False)
+        .replace({"": np.nan, "nan": np.nan, "None": np.nan, "<NA>": np.nan, "INCLUIR": np.nan, "incluir": np.nan})
+    )
+    return pd.to_numeric(cleaned, errors="coerce")
+
+
+def normalize_age_series(series: pd.Series) -> pd.Series:
+    """Normaliza idade aceitando formatos numericos e datas serializadas de planilha."""
+    numeric_age = coerce_numeric_series(series)
+    date_values = pd.to_datetime(series, errors="coerce")
+
+    age_from_date = np.where(
+        date_values.notna() & (date_values.dt.year == 1900) & (date_values.dt.month == 1),
+        date_values.dt.day,
+        np.nan,
+    )
+
+    result = pd.Series(numeric_age, index=series.index)
+    mask = result.isna() & ~pd.isna(age_from_date)
+    result.loc[mask] = age_from_date[mask]
+    result = result.where(result.between(6, 30))
+    return result.round()
+
+
+def coalesce_columns(df: pd.DataFrame, new_col: str, candidates: list[str], numeric: bool = False) -> None:
+    """
+    Cria uma coluna consolidada com a primeira informacao nao nula encontrada
+    entre as candidatas, na ordem informada.
+    """
+    result = None
+    for col in candidates:
+        if col not in df.columns:
+            continue
+        values = coerce_numeric_series(df[col]) if numeric else clean_empty_strings(df[col])
+        result = values if result is None else result.where(result.notna(), values)
+    if result is None:
+        result = pd.Series(np.nan, index=df.index)
+    df[new_col] = result
+
+
+def standardize_gender(value: str) -> str:
+    if pd.isna(value):
+        return np.nan
+    value_clean = str(value).strip().lower()
+    mapping = {
+        "menino": "Masculino",
+        "masculino": "Masculino",
+        "menina": "Feminino",
+        "feminino": "Feminino",
+    }
+    return mapping.get(value_clean, str(value).strip())
+
+
+def standardize_stone(value: str) -> str:
+    if pd.isna(value):
+        return np.nan
+    value_norm = unicodedata.normalize("NFKD", str(value)).encode("ascii", "ignore").decode("ascii")
+    value_norm = value_norm.strip().lower()
+    mapping = {
+        "quartzo": "Quartzo",
+        "agata": "Agata",
+        "ametista": "Ametista",
+        "topazio": "Topazio",
+        "incluir": np.nan,
+    }
+    return mapping.get(value_norm, str(value).strip())
+
+
+def extract_phase_code(value: str) -> str:
+    """
+    Extrai ALFA ou FASE X.
+    Em 2022 ha casos numericos simples (ex.: "7"), tambem tratados aqui.
+    """
+    if pd.isna(value):
+        return np.nan
+    raw = str(value).strip().upper()
+    if raw in {"", "NAN", "NONE"}:
+        return np.nan
+    if "ALFA" in raw:
+        return "ALFA"
+    match = re.search(r"FASE\s*([0-9]+)", raw)
+    if match:
+        return f"FASE {int(match.group(1))}"
+    if re.fullmatch(r"[0-9]+", raw):
+        phase_num = int(raw)
+        return "ALFA" if phase_num == 0 else f"FASE {phase_num}"
+    return np.nan
+
+
+def load_and_prepare_data(data_path: Path) -> pd.DataFrame:
+    """Le o Excel multi-aba e devolve um unico DataFrame harmonizado."""
+    xls = pd.ExcelFile(data_path)
+    unified_frames = []
+
+    for sheet in xls.sheet_names:
+        year_match = re.search(r"20\d{2}", sheet)
+        if not year_match:
+            continue
+        year = int(year_match.group())
+
+        raw = xls.parse(sheet)
+        raw = raw.dropna(how="all").copy()
+        raw.columns = [normalize_column_name(c) for c in raw.columns]
+
+        if "ra" not in raw.columns:
+            continue
+        raw["ra"] = clean_empty_strings(raw["ra"])
+        raw = raw[~raw["ra"].str.upper().isin(["RA-1", "NAN"])]
+        raw = raw[raw["ra"].notna()]
+        raw["ano_referencia"] = year
+
+        coalesce_columns(raw, "nome_aluno", ["nome_anonimizado", "nome"], numeric=False)
+        coalesce_columns(raw, "idade", ["idade", "idade_22"], numeric=False)
+        coalesce_columns(raw, "data_nascimento", ["data_de_nasc", "ano_nasc"], numeric=False)
+        coalesce_columns(raw, "instituicao_ensino", ["instituicao_de_ensino", "escola"], numeric=False)
+        coalesce_columns(raw, "fase_ideal", ["fase_ideal", "fase_ideal_"], numeric=False)
+        coalesce_columns(raw, "defasagem", ["defasagem", "defas"], numeric=True)
+
+        coalesce_columns(raw, "nota_matematica", ["mat", "matem"], numeric=True)
+        coalesce_columns(raw, "nota_portugues", ["por", "portug"], numeric=True)
+        coalesce_columns(raw, "nota_ingles", ["ing", "ingles"], numeric=True)
+
+        coalesce_columns(raw, "inde_ano", ["inde_2024", "inde_2023", "inde_23", "inde_22"], numeric=True)
+        coalesce_columns(raw, "pedra_ano", ["pedra_2024", "pedra_2023", "pedra_23", "pedra_22"], numeric=False)
+        coalesce_columns(raw, "ativo_inativo", ["ativo_inativo", "ativo_inativo_1"], numeric=False)
+
+        for col in [
+            "fase",
+            "turma",
+            "genero",
+            "ano_ingresso",
+            "pedra_20",
+            "pedra_21",
+            "pedra_22",
+            "pedra_23",
+            "inde_22",
+            "inde_23",
+            "ian",
+            "ida",
+            "ieg",
+            "iaa",
+            "ips",
+            "ipp",
+            "ipv",
+            "indicado",
+            "atingiu_pv",
+            "rec_psicologia",
+        ]:
+            if col not in raw.columns:
+                raw[col] = np.nan
+
+        phase_from_fase = raw["fase"].apply(extract_phase_code)
+        phase_from_ideal = raw["fase_ideal"].apply(extract_phase_code)
+        raw["fase_programa"] = phase_from_fase.where(phase_from_fase.notna(), phase_from_ideal)
+
+        raw["idade"] = normalize_age_series(raw["idade"])
+
+        numeric_columns = [
+            "defasagem",
+            "inde_22",
+            "inde_23",
+            "inde_ano",
+            "ian",
+            "ida",
+            "ieg",
+            "iaa",
+            "ips",
+            "ipp",
+            "ipv",
+            "nota_matematica",
+            "nota_portugues",
+            "nota_ingles",
+        ]
+        for n_col in numeric_columns:
+            raw[n_col] = coerce_numeric_series(raw[n_col])
+
+        score_columns = [
+            "inde_22",
+            "inde_23",
+            "inde_ano",
+            "ian",
+            "ida",
+            "ieg",
+            "iaa",
+            "ips",
+            "ipp",
+            "ipv",
+            "nota_matematica",
+            "nota_portugues",
+            "nota_ingles",
+        ]
+        for s_col in score_columns:
+            raw[s_col] = raw[s_col].clip(lower=0, upper=10)
+
+        raw["genero"] = raw["genero"].apply(standardize_gender)
+        raw["pedra_ano"] = raw["pedra_ano"].apply(standardize_stone)
+        raw["pedra_22"] = raw["pedra_22"].apply(standardize_stone)
+        raw["pedra_23"] = raw["pedra_23"].apply(standardize_stone)
+
+        final_columns = [
+            "ra",
+            "ano_referencia",
+            "nome_aluno",
+            "data_nascimento",
+            "idade",
+            "genero",
+            "ano_ingresso",
+            "instituicao_ensino",
+            "fase",
+            "fase_ideal",
+            "fase_programa",
+            "turma",
+            "pedra_20",
+            "pedra_21",
+            "pedra_22",
+            "pedra_23",
+            "pedra_ano",
+            "inde_22",
+            "inde_23",
+            "inde_ano",
+            "ian",
+            "ida",
+            "ieg",
+            "iaa",
+            "ips",
+            "ipp",
+            "ipv",
+            "defasagem",
+            "nota_matematica",
+            "nota_portugues",
+            "nota_ingles",
+            "indicado",
+            "atingiu_pv",
+            "ativo_inativo",
+            "rec_psicologia",
+        ]
+        for col in final_columns:
+            if col not in raw.columns:
+                raw[col] = np.nan
+
+        unified_frames.append(raw[final_columns].copy())
+
+    if not unified_frames:
+        raise ValueError("Nenhuma aba valida foi carregada do Excel.")
+
+    df = pd.concat(unified_frames, ignore_index=True)
+    df = df.drop_duplicates(subset=["ra", "ano_referencia"], keep="first")
+    df = df.sort_values(["ra", "ano_referencia"]).reset_index(drop=True)
+
+    cat_cols = [
+        "nome_aluno",
+        "data_nascimento",
+        "genero",
+        "instituicao_ensino",
+        "fase",
+        "fase_ideal",
+        "fase_programa",
+        "turma",
+        "pedra_20",
+        "pedra_21",
+        "pedra_22",
+        "pedra_23",
+        "pedra_ano",
+        "indicado",
+        "atingiu_pv",
+        "ativo_inativo",
+        "rec_psicologia",
+    ]
+    for c_col in cat_cols:
+        df[c_col] = clean_empty_strings(df[c_col])
+
+    return df
+
+
+def build_longitudinal_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    """Cria visao ano atual + ano seguinte por RA."""
+    base = df.rename(columns={"ano_referencia": "ano_base"}).copy()
+    future = df[["ra", "ano_referencia", "ian", "ida", "inde_ano", "ieg", "ips", "ipp", "ipv"]].copy()
+    future = future.rename(
+        columns={
+            "ano_referencia": "ano_base",
+            "ian": "ian_prox",
+            "ida": "ida_prox",
+            "inde_ano": "inde_prox",
+            "ieg": "ieg_prox",
+            "ips": "ips_prox",
+            "ipp": "ipp_prox",
+            "ipv": "ipv_prox",
+        }
+    )
+    future["ano_base"] = future["ano_base"] - 1
+    merged = base.merge(future, on=["ra", "ano_base"], how="left")
+    merged["delta_ida_prox"] = merged["ida_prox"] - merged["ida"]
+    merged["delta_inde_prox"] = merged["inde_prox"] - merged["inde_ano"]
+    merged["delta_ian_prox"] = merged["ian_prox"] - merged["ian"]
+    return merged
+
+
+========================================================================================================================
+CELL 6
+========================================================================================================================
+def load_consolidated_with_fallback() -> tuple[pd.DataFrame, str]:
+    if DATA_PATH.exists():
+        try:
+            return load_and_prepare_data(DATA_PATH), "excel"
+        except PermissionError as exc:
+            print(f"Nao foi possivel ler o Excel por permissao: {exc}")
+            print("Tentando fallback no CSV consolidado...")
+        except Exception as exc:
+            print(f"Falha na leitura do Excel: {exc}")
+            print("Tentando fallback no CSV consolidado...")
+
+    if CONSOLIDATED_FALLBACK_PATH.exists():
+        fallback_df = pd.read_csv(CONSOLIDATED_FALLBACK_PATH)
+
+        numeric_columns = [
+            "ano_referencia",
+            "idade",
+            "defasagem",
+            "inde_22",
+            "inde_23",
+            "inde_ano",
+            "ian",
+            "ida",
+            "ieg",
+            "iaa",
+            "ips",
+            "ipp",
+            "ipv",
+            "nota_matematica",
+            "nota_portugues",
+            "nota_ingles",
+        ]
+        for col in numeric_columns:
+            if col in fallback_df.columns:
+                if col == "idade":
+                    fallback_df[col] = normalize_age_series(fallback_df[col])
+                else:
+                    fallback_df[col] = coerce_numeric_series(fallback_df[col])
+
+        string_columns = [
+            "ra",
+            "nome_aluno",
+            "data_nascimento",
+            "genero",
+            "instituicao_ensino",
+            "fase",
+            "fase_ideal",
+            "fase_programa",
+            "turma",
+            "pedra_20",
+            "pedra_21",
+            "pedra_22",
+            "pedra_23",
+            "pedra_ano",
+            "indicado",
+            "atingiu_pv",
+            "ativo_inativo",
+            "rec_psicologia",
+        ]
+        for col in string_columns:
+            if col in fallback_df.columns:
+                fallback_df[col] = clean_empty_strings(fallback_df[col])
+
+        fallback_df = fallback_df.drop_duplicates(subset=["ra", "ano_referencia"], keep="first")
+        fallback_df = fallback_df.sort_values(["ra", "ano_referencia"]).reset_index(drop=True)
+        return fallback_df, "csv"
+
+    raise FileNotFoundError("Nao foi possivel carregar a base nem via Excel nem via CSV consolidado.")
+
+
+df, fonte_dados = load_consolidated_with_fallback()
+df_long = build_longitudinal_dataset(df)
+
+if {"nota_matematica", "nota_portugues", "nota_ingles"}.issubset(df.columns):
+    df["media_notas"] = df[["nota_matematica", "nota_portugues", "nota_ingles"]].mean(axis=1)
+if {"iaa", "ieg", "ips", "ipp"}.issubset(df.columns):
+    df["media_comportamental"] = df[["iaa", "ieg", "ips", "ipp"]].mean(axis=1)
+
+print("Fonte utilizada:", fonte_dados)
+print("Shape consolidado:", df.shape)
+print("Anos na base:", sorted(df["ano_referencia"].dropna().unique().tolist()))
+print("Alunos unicos no periodo:", df["ra"].nunique())
+
+display(df.head(3))
+display(
+    df.groupby("ano_referencia", as_index=False)
+    .agg(alunos=("ra", "nunique"), registros=("ra", "size"))
+    .sort_values("ano_referencia")
+)
+
+df.to_csv(PROCESSED_DIR / "pede_consolidado_2022_2024.csv", index=False)
+df_long.to_csv(PROCESSED_DIR / "pede_longitudinal_2022_2024.csv", index=False)
+print("Arquivos salvos em:", PROCESSED_DIR.resolve())
+
+
+========================================================================================================================
+CELL 8
+========================================================================================================================
+missing_pct = (df.isna().mean() * 100).sort_values(ascending=False).reset_index()
+missing_pct.columns = ["nome_da_coluna", "percentual_valores_ausentes"]
+
+display(missing_pct.head(20).round(2))
+
+fig_missing = px.bar(
+    missing_pct.head(20),
+    x="percentual_valores_ausentes",
+    y="nome_da_coluna",
+    orientation="h",
+    title="Top 20 colunas com maior percentual de valores ausentes",
+    text=missing_pct.head(20)["percentual_valores_ausentes"].round(1).astype(str) + "%",
+    labels={
+        "percentual_valores_ausentes": "Percentual de valores ausentes (%)",
+        "nome_da_coluna": "Nome da coluna",
+    },
+)
+fig_missing.update_layout(yaxis={"categoryorder": "total ascending"})
+fig_missing.update_traces(textposition="outside", cliponaxis=False)
+fig_missing.show()
+
+
+
+========================================================================================================================
+CELL 10
+========================================================================================================================
+corr_features = [
+    "inde_ano",
+    "ian",
+    "ida",
+    "ieg",
+    "iaa",
+    "ips",
+    "ipp",
+    "ipv",
+    "defasagem",
+    "nota_matematica",
+    "nota_portugues",
+    "nota_ingles",
+]
+corr_features = [c for c in corr_features if c in df.columns]
+
+indicator_name_map = {
+    "inde_ano": "INDE anual",
+    "ian": "IAN - adequacao de nivel",
+    "ida": "IDA - desempenho academico",
+    "ieg": "IEG - engajamento",
+    "iaa": "IAA - autoavaliacao",
+    "ips": "IPS - indice psicossocial",
+    "ipp": "IPP - indice psicopedagogico",
+    "ipv": "IPV - ponto de virada",
+    "defasagem": "Defasagem escolar",
+    "nota_matematica": "Nota de matematica",
+    "nota_portugues": "Nota de portugues",
+    "nota_ingles": "Nota de ingles",
+}
+
+corr_matrix = df[corr_features].corr(method="spearman", min_periods=30)
+corr_matrix = corr_matrix.rename(index=indicator_name_map, columns=indicator_name_map)
+display(corr_matrix.round(3))
+
+fig_corr = px.imshow(
+    corr_matrix,
+    text_auto=".2f",
+    aspect="auto",
+    color_continuous_scale="RdBu",
+    zmin=-1,
+    zmax=1,
+    title="Matriz de correlacao de Spearman - indicadores consolidados",
+)
+fig_corr.update_layout(coloraxis_colorbar={"title": "rho (Spearman)"})
+fig_corr.show()
+
+corr_inde_by_year = []
+for year, part in df.groupby("ano_referencia"):
+    required_cols = ["inde_ano", "ida", "ieg", "ips", "ipp", "ian", "ipv"]
+    if not set(required_cols).issubset(part.columns):
+        continue
+
+    sub = part[required_cols].dropna()
+    if len(sub) < 30:
+        continue
+
+    cm = sub.corr(method="spearman")
+    corr_inde_by_year.append(
+        {
+            "ano_referencia": int(year),
+            "corr_inde_ida": cm.loc["inde_ano", "ida"],
+            "corr_inde_ieg": cm.loc["inde_ano", "ieg"],
+            "corr_inde_ips": cm.loc["inde_ano", "ips"],
+            "corr_inde_ipp": cm.loc["inde_ano", "ipp"],
+            "corr_inde_ian": cm.loc["inde_ano", "ian"],
+            "corr_inde_ipv": cm.loc["inde_ano", "ipv"],
+            "alunos_validos": len(sub),
+        }
+    )
+
+corr_inde_by_year = pd.DataFrame(corr_inde_by_year).sort_values("ano_referencia")
+
+if corr_inde_by_year.empty:
+    print("Nao ha amostra suficiente para correlacoes anuais entre INDE e os demais indicadores.")
+else:
+    corr_inde_display = corr_inde_by_year.rename(
+        columns={
+            "ano_referencia": "Ano de referencia",
+            "corr_inde_ida": "INDE x IDA",
+            "corr_inde_ieg": "INDE x IEG",
+            "corr_inde_ips": "INDE x IPS",
+            "corr_inde_ipp": "INDE x IPP",
+            "corr_inde_ian": "INDE x IAN",
+            "corr_inde_ipv": "INDE x IPV",
+            "alunos_validos": "Quantidade de alunos",
+        }
+    )
+    display(corr_inde_display.round(3))
+
+    corr_inde_long = corr_inde_by_year.melt(
+        id_vars=["ano_referencia", "alunos_validos"],
+        value_vars=[
+            "corr_inde_ida",
+            "corr_inde_ieg",
+            "corr_inde_ips",
+            "corr_inde_ipp",
+            "corr_inde_ian",
+            "corr_inde_ipv",
+        ],
+        var_name="par_correlacao",
+        value_name="correlacao_spearman",
+    )
+
+    pair_name_map = {
+        "corr_inde_ida": "INDE x IDA (desempenho academico)",
+        "corr_inde_ieg": "INDE x IEG (engajamento)",
+        "corr_inde_ips": "INDE x IPS (psicossocial)",
+        "corr_inde_ipp": "INDE x IPP (psicopedagogico)",
+        "corr_inde_ian": "INDE x IAN (adequacao de nivel)",
+        "corr_inde_ipv": "INDE x IPV (ponto de virada)",
+    }
+    corr_inde_long["Par de indicadores"] = corr_inde_long["par_correlacao"].map(pair_name_map)
+    corr_inde_long["Ano de referencia"] = corr_inde_long["ano_referencia"].astype(str)
+
+    fig_corr_inde_year = px.line(
+        corr_inde_long,
+        x="Ano de referencia",
+        y="correlacao_spearman",
+        color="Par de indicadores",
+        markers=True,
+        title="Correlacao anual entre INDE e indicadores academicos/comportamentais",
+        labels={
+            "correlacao_spearman": "Correlacao de Spearman",
+            "Ano de referencia": "Ano de referencia",
+        },
+    )
+    fig_corr_inde_year.update_xaxes(type="category")
+    fig_corr_inde_year.show()
+
+
+
+========================================================================================================================
+CELL 12
+========================================================================================================================
+ian_summary = (
+    df.dropna(subset=["ian"])
+    .groupby("ano_referencia", as_index=False)
+    .agg(
+        ian_medio=("ian", "mean"),
+        percentual_defasagem_alta=("ian", lambda s: (s <= 5).mean() * 100),
+        alunos=("ra", "nunique"),
+    )
+    .sort_values("ano_referencia")
+)
+display(ian_summary.round(2))
+
+fig_ian_line = px.line(
+    ian_summary,
+    x="ano_referencia",
+    y="ian_medio",
+    markers=True,
+    text=ian_summary["ian_medio"].round(2),
+    title="Evolucao anual do IAN medio (adequacao de nivel)",
+    labels={
+        "ian_medio": "IAN medio",
+        "ano_referencia": "Ano de referencia",
+    },
+)
+fig_ian_line.update_traces(textposition="top center")
+fig_ian_line.update_xaxes(type="category")
+fig_ian_line.show()
+
+
+def classificar_faixa_ian(value: float) -> str:
+    if pd.isna(value):
+        return np.nan
+    if value <= 5:
+        return "Defasagem alta (IAN <= 5)"
+    if value <= 7:
+        return "Atencao (5 < IAN <= 7)"
+    return "Adequado (IAN > 7)"
+
+
+ian_mix = df[["ano_referencia", "ian"]].copy()
+ian_mix["faixa_ian"] = ian_mix["ian"].apply(classificar_faixa_ian)
+ian_mix = (
+    ian_mix.dropna(subset=["faixa_ian"])
+    .groupby(["ano_referencia", "faixa_ian"], as_index=False)
+    .size()
+    .rename(columns={"size": "quantidade_alunos"})
+)
+ian_mix["percentual"] = ian_mix.groupby("ano_referencia")["quantidade_alunos"].transform(lambda s: 100 * s / s.sum())
+ian_mix["ano_referencia"] = ian_mix["ano_referencia"].astype(int).astype(str)
+ian_mix["faixa_ian"] = pd.Categorical(
+    ian_mix["faixa_ian"],
+    categories=[
+        "Defasagem alta (IAN <= 5)",
+        "Atencao (5 < IAN <= 7)",
+        "Adequado (IAN > 7)",
+    ],
+    ordered=True,
+)
+ian_mix = ian_mix.sort_values(["ano_referencia", "faixa_ian"])
+
+fig_ian_mix = px.bar(
+    ian_mix,
+    x="ano_referencia",
+    y="percentual",
+    color="faixa_ian",
+    barmode="stack",
+    title="Composicao percentual de perfis de IAN por ano",
+    labels={
+        "percentual": "Percentual de alunos (%)",
+        "ano_referencia": "Ano de referencia",
+        "faixa_ian": "Perfil de adequacao de nivel (IAN)",
+    },
+    color_discrete_map={
+        "Defasagem alta (IAN <= 5)": "#E76F51",
+        "Atencao (5 < IAN <= 7)": "#E9C46A",
+        "Adequado (IAN > 7)": "#2A9D8F",
+    },
+)
+fig_ian_mix.update_traces(texttemplate="%{y:.1f}%", textposition="inside")
+fig_ian_mix.update_xaxes(
+    type="category",
+    categoryorder="array",
+    categoryarray=sorted(ian_mix["ano_referencia"].unique().tolist()),
+)
+fig_ian_mix.update_yaxes(range=[0, 100])
+fig_ian_mix.show()
+
+ian_by_gender = (
+    df.dropna(subset=["ian", "genero"])
+    .groupby(["ano_referencia", "genero"], as_index=False)
+    .agg(
+        ian_medio=("ian", "mean"),
+        percentual_defasagem_alta=("ian", lambda s: (s <= 5).mean() * 100),
+        alunos=("ra", "nunique"),
+    )
+    .sort_values(["ano_referencia", "genero"])
+)
+ian_by_gender["ano_referencia"] = ian_by_gender["ano_referencia"].astype(int).astype(str)
+display(ian_by_gender.round(2))
+
+fig_ian_gender = px.bar(
+    ian_by_gender,
+    x="ano_referencia",
+    y="percentual_defasagem_alta",
+    color="genero",
+    barmode="group",
+    text="percentual_defasagem_alta",
+    title="Defasagem alta no IAN por sexo e ano",
+    labels={
+        "ano_referencia": "Ano de referencia",
+        "percentual_defasagem_alta": "Alunos com IAN <= 5 (%)",
+        "genero": "Sexo",
+    },
+    color_discrete_map={"Feminino": "#2A9D8F", "Masculino": "#E76F51"},
+)
+fig_ian_gender.update_traces(texttemplate="%{text:.0f}%", textposition="outside")
+fig_ian_gender.update_xaxes(type="category")
+fig_ian_gender.show()
+
+ian_gender_pivot = ian_by_gender.pivot(index="genero", columns="ano_referencia", values="percentual_defasagem_alta")
+variation_rows = []
+for gender_name in ian_gender_pivot.index:
+    row = ian_gender_pivot.loc[gender_name]
+    for start_year, end_year in [("2022", "2023"), ("2023", "2024"), ("2022", "2024")]:
+        if start_year in row.index and end_year in row.index and pd.notna(row[start_year]) and pd.notna(row[end_year]):
+            variation_rows.append(
+                {
+                    "genero": gender_name,
+                    "periodo": f"{start_year} -> {end_year}",
+                    "variacao_defasagem_pp": row[end_year] - row[start_year],
+                }
+            )
+
+gender_variation_df = pd.DataFrame(variation_rows)
+display(gender_variation_df.round(2))
+
+gender_variation_df["rotulo_variacao_pp"] = gender_variation_df["variacao_defasagem_pp"].round(0).map(lambda v: f"{v:+.0f}")
+
+fig_gender_variation = px.bar(
+    gender_variation_df,
+    x="periodo",
+    y="variacao_defasagem_pp",
+    color="genero",
+    barmode="group",
+    text="rotulo_variacao_pp",
+    title="Variacao da defasagem alta no IAN por sexo (pontos percentuais)",
+    labels={
+        "periodo": "Periodo comparado",
+        "variacao_defasagem_pp": "Variacao da taxa de IAN <= 5 (p.p.)",
+        "genero": "Sexo",
+    },
+    color_discrete_map={"Feminino": "#2A9D8F", "Masculino": "#E76F51"},
+)
+fig_gender_variation.update_traces(
+    texttemplate="%{text} p.p.",
+    textposition="outside",
+    hovertemplate="Periodo comparado=%{x}<br>Variacao da taxa de IAN <= 5 (p.p.)=%{y:+.0f}<extra></extra>",
+)
+fig_gender_variation.add_hline(y=0, line_dash="dash", line_color="#264653")
+fig_gender_variation.show()
+
+age_analysis = df.dropna(subset=["ian", "idade"]).copy()
+age_analysis["faixa_etaria"] = pd.cut(
+    age_analysis["idade"],
+    bins=[0, 10, 13, 16, 30],
+    labels=["7-10 anos", "11-13 anos", "14-16 anos", "17+ anos"],
+)
+
+ian_by_age = (
+    age_analysis.dropna(subset=["faixa_etaria"])
+    .groupby(["ano_referencia", "faixa_etaria"], as_index=False)
+    .agg(
+        ian_medio=("ian", "mean"),
+        percentual_defasagem_alta=("ian", lambda s: (s <= 5).mean() * 100),
+        alunos=("ra", "nunique"),
+    )
+    .sort_values(["ano_referencia", "faixa_etaria"])
+)
+ian_by_age["ano_referencia"] = ian_by_age["ano_referencia"].astype(int).astype(str)
+display(ian_by_age.round(2))
+
+fig_ian_age = px.bar(
+    ian_by_age,
+    x="percentual_defasagem_alta",
+    y="faixa_etaria",
+    color="ano_referencia",
+    barmode="group",
+    orientation="h",
+    text="percentual_defasagem_alta",
+    title="Defasagem alta no IAN por faixa etaria",
+    labels={
+        "percentual_defasagem_alta": "Alunos com IAN <= 5 (%)",
+        "faixa_etaria": "Faixa etaria",
+        "ano_referencia": "Ano de referencia",
+    },
+    category_orders={"ano_referencia": ["2024", "2023", "2022"]},
+    color_discrete_map={"2024": "#2A9D8F", "2023": "#457B9D", "2022": "#1D3557"},
+)
+fig_ian_age.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+fig_ian_age.update_xaxes(range=[0, 100])
+fig_ian_age.update_yaxes(categoryorder="array", categoryarray=["17+ anos", "14-16 anos", "11-13 anos", "7-10 anos"])
+fig_ian_age.show()
+
+
+
+
+
+
+
+
+
+========================================================================================================================
+CELL 15
+========================================================================================================================
+ida_summary = (
+    df.dropna(subset=["ida"])
+    .groupby("ano_referencia", as_index=False)
+    .agg(
+        ida_media=("ida", "mean"),
+        ida_percentil_25=("ida", lambda s: s.quantile(0.25)),
+        ida_percentil_75=("ida", lambda s: s.quantile(0.75)),
+        alunos=("ra", "nunique"),
+    )
+    .sort_values("ano_referencia")
+)
+display(ida_summary.round(3))
+
+fig_ida_line = px.line(
+    ida_summary,
+    x="ano_referencia",
+    y="ida_media",
+    markers=True,
+    text=ida_summary["ida_media"].round(2),
+    title="Evolucao anual do IDA medio",
+    labels={"ano_referencia": "Ano de referencia", "ida_media": "IDA medio"},
+)
+fig_ida_line.update_traces(textposition="top center")
+fig_ida_line.update_xaxes(type="category")
+fig_ida_line.show()
+
+ida_dist = df.dropna(subset=["ida", "ano_referencia"]).copy()
+ida_dist["ano_referencia"] = ida_dist["ano_referencia"].astype(int).astype(str)
+
+fig_ida_violin = px.violin(
+    ida_dist,
+    x="ano_referencia",
+    y="ida",
+    color="ano_referencia",
+    title="Distribuicao do IDA por ano (sem linha de mediana)",
+    labels={
+        "ano_referencia": "Ano de referencia",
+        "ida": "IDA - desempenho academico",
+    },
+    box=False,
+    points=False,
+    color_discrete_sequence=["#1D3557", "#457B9D", "#2A9D8F"],
+)
+fig_ida_violin.update_layout(showlegend=False)
+fig_ida_violin.update_xaxes(type="category")
+fig_ida_violin.show()
+
+
+
+========================================================================================================================
+CELL 18
+========================================================================================================================
+corr_rows = []
+for year, part in df.groupby("ano_referencia"):
+    sub = part[["ieg", "ida", "ipv"]].dropna()
+    if len(sub) < 10:
+        continue
+    corr_rows.append(
+        {
+            "ano_referencia": int(year),
+            "corr_ieg_ida": sub["ieg"].corr(sub["ida"], method="spearman"),
+            "corr_ieg_ipv": sub["ieg"].corr(sub["ipv"], method="spearman"),
+            "corr_ida_ipv": sub["ida"].corr(sub["ipv"], method="spearman"),
+            "alunos_validos": len(sub),
+        }
+    )
+
+corr_df = pd.DataFrame(corr_rows).sort_values("ano_referencia")
+
+corr_df_display = corr_df.rename(
+    columns={
+        "ano_referencia": "Ano de referencia",
+        "corr_ieg_ida": "IEG x IDA",
+        "corr_ieg_ipv": "IEG x IPV",
+        "corr_ida_ipv": "IDA x IPV",
+        "alunos_validos": "Quantidade de alunos",
+    }
+)
+display(corr_df_display.round(3))
+
+corr_long = corr_df.melt(
+    id_vars=["ano_referencia", "alunos_validos"],
+    value_vars=["corr_ieg_ida", "corr_ieg_ipv", "corr_ida_ipv"],
+    var_name="par_correlacao",
+    value_name="correlacao_spearman",
+)
+
+pair_name_map = {
+    "corr_ieg_ida": "IEG x IDA",
+    "corr_ieg_ipv": "IEG x IPV",
+    "corr_ida_ipv": "IDA x IPV",
+}
+corr_long["Par de indicadores"] = corr_long["par_correlacao"].map(pair_name_map)
+corr_long["Ano de referencia"] = corr_long["ano_referencia"].astype(str)
+corr_long["rotulo"] = corr_long["correlacao_spearman"].map(lambda v: f"{v:.2f}")
+
+fig_corr_q3 = px.bar(
+    corr_long,
+    x="Ano de referencia",
+    y="correlacao_spearman",
+    color="Par de indicadores",
+    barmode="group",
+    text="rotulo",
+    title="Q3 - Correlacoes IEG x IDA, IEG x IPV e IDA x IPV por ano",
+    labels={
+        "correlacao_spearman": "rho (Spearman)",
+        "Ano de referencia": "Ano de referencia",
+    },
+    color_discrete_map={
+        "IEG x IDA": "#7B3F98",
+        "IEG x IPV": "#1B9E77",
+        "IDA x IPV": "#386CB0",
+    },
+)
+fig_corr_q3.update_traces(textposition="outside")
+fig_corr_q3.update_xaxes(type="category")
+fig_corr_q3.update_yaxes(range=[0, corr_long["correlacao_spearman"].max() + 0.12])
+fig_corr_q3.show()
+
+scatter_df = df.dropna(subset=["ieg", "ida", "ipv", "ano_referencia"]).copy()
+scatter_df["ano_referencia"] = scatter_df["ano_referencia"].astype(int).astype(str)
+
+year_color_map = {"2022": "#1D3557", "2023": "#457B9D", "2024": "#2A9D8F"}
+
+fig_scatter_ieg_ida = px.scatter(
+    scatter_df,
+    x="ieg",
+    y="ida",
+    color="ano_referencia",
+    opacity=0.55,
+    title="Relacao entre IEG (engajamento) e IDA (desempenho academico)",
+    labels={
+        "ieg": "IEG - indicador de engajamento",
+        "ida": "IDA - indicador de desempenho academico",
+        "ano_referencia": "Ano de referencia",
+    },
+    color_discrete_map=year_color_map,
+    hover_data=["ra", "fase_programa", "pedra_ano"],
+)
+for year_value, part in scatter_df.groupby("ano_referencia"):
+    if len(part) < 2:
+        continue
+    slope, intercept = np.polyfit(part["ieg"], part["ida"], 1)
+    x_line = np.linspace(part["ieg"].min(), part["ieg"].max(), 80)
+    y_line = slope * x_line + intercept
+    fig_scatter_ieg_ida.add_trace(
+        go.Scatter(
+            x=x_line,
+            y=y_line,
+            mode="lines",
+            name=f"Tendencia {year_value} (IEG x IDA)",
+            line={"dash": "dash", "width": 2, "color": year_color_map.get(year_value, "#333333")},
+        )
+    )
+fig_scatter_ieg_ida.show()
+
+fig_scatter_ieg_ipv = px.scatter(
+    scatter_df,
+    x="ieg",
+    y="ipv",
+    color="ano_referencia",
+    opacity=0.55,
+    title="Relacao entre IEG (engajamento) e IPV (ponto de virada)",
+    labels={
+        "ieg": "IEG - indicador de engajamento",
+        "ipv": "IPV - indicador de ponto de virada",
+        "ano_referencia": "Ano de referencia",
+    },
+    color_discrete_map=year_color_map,
+    hover_data=["ra", "fase_programa", "pedra_ano"],
+)
+for year_value, part in scatter_df.groupby("ano_referencia"):
+    if len(part) < 2:
+        continue
+    slope, intercept = np.polyfit(part["ieg"], part["ipv"], 1)
+    x_line = np.linspace(part["ieg"].min(), part["ieg"].max(), 80)
+    y_line = slope * x_line + intercept
+    fig_scatter_ieg_ipv.add_trace(
+        go.Scatter(
+            x=x_line,
+            y=y_line,
+            mode="lines",
+            name=f"Tendencia {year_value} (IEG x IPV)",
+            line={"dash": "dash", "width": 2, "color": year_color_map.get(year_value, "#333333")},
+        )
+    )
+fig_scatter_ieg_ipv.show()
+
+
+
+========================================================================================================================
+CELL 21
+========================================================================================================================
+coherence = df.dropna(subset=["iaa", "ida", "ieg"]).copy()
+coherence["media_objetiva_desempenho"] = coherence[["ida", "ieg"]].mean(axis=1)
+coherence["desvio_autoavaliacao"] = coherence["iaa"] - coherence["media_objetiva_desempenho"]
+
+coherence_summary = (
+    coherence.groupby("ano_referencia", as_index=False)
+    .agg(
+        desvio_medio=("desvio_autoavaliacao", "mean"),
+        percentual_superestimacao=("desvio_autoavaliacao", lambda s: (s > 0.5).mean() * 100),
+        percentual_subestimacao=("desvio_autoavaliacao", lambda s: (s < -0.5).mean() * 100),
+        alunos=("ra", "nunique"),
+    )
+    .sort_values("ano_referencia")
+)
+display(coherence_summary.round(3))
+
+coherence_plot = coherence.copy()
+coherence_plot["ano_referencia"] = coherence_plot["ano_referencia"].astype(int).astype(str)
+
+fig_coherence = px.histogram(
+    coherence_plot,
+    x="desvio_autoavaliacao",
+    color="ano_referencia",
+    barmode="overlay",
+    nbins=40,
+    opacity=0.60,
+    title="Distribuicao do desvio entre IAA e media objetiva (IDA, IEG)",
+    labels={
+        "desvio_autoavaliacao": "Desvio da autoavaliacao (IAA - media de IDA e IEG)",
+        "ano_referencia": "Ano de referencia",
+    },
+    color_discrete_sequence=["#1D3557", "#457B9D", "#2A9D8F"],
+)
+fig_coherence.add_vline(x=0, line_dash="dash", line_color="#264653")
+fig_coherence.show()
+
+
+
+========================================================================================================================
+CELL 24
+========================================================================================================================
+prior = df_long[df_long["ano_base"].isin([2022, 2023])].copy()
+prior = prior.dropna(subset=["ida", "ida_prox", "ieg", "ieg_prox", "ips", "ipp", "ian", "ian_prox"])
+
+prior["queda_ida_relevante"] = (prior["delta_ida_prox"] <= -1.0).astype(int)
+prior["delta_ieg_prox"] = prior["ieg_prox"] - prior["ieg"]
+prior["queda_ieg_relevante"] = (prior["delta_ieg_prox"] <= -1.0).astype(int)
+prior["queda_ian_relevante"] = (prior["delta_ian_prox"] <= -1.0).astype(int)
+
+risk_summary = []
+for target_col, target_name in [
+    ("queda_ida_relevante", "Queda relevante de IDA (>= 1 ponto)"),
+    ("queda_ieg_relevante", "Queda relevante de IEG (>= 1 ponto)"),
+    ("queda_ian_relevante", "Queda relevante de IAN (>= 1 ponto)"),
+]:
+    grouped = prior.groupby(target_col)[["ips", "ipp"]].mean()
+    if {0, 1}.issubset(set(grouped.index)):
+        risk_summary.append(
+            {
+                "evento_futuro": target_name,
+                "ips_sem_evento": grouped.loc[0, "ips"],
+                "ips_com_evento": grouped.loc[1, "ips"],
+                "diferenca_ips": grouped.loc[1, "ips"] - grouped.loc[0, "ips"],
+                "ipp_sem_evento": grouped.loc[0, "ipp"],
+                "ipp_com_evento": grouped.loc[1, "ipp"],
+                "diferenca_ipp": grouped.loc[1, "ipp"] - grouped.loc[0, "ipp"],
+            }
+        )
+
+risk_summary_df = pd.DataFrame(risk_summary)
+display(risk_summary_df.round(3))
+
+prior["ips_baixo"] = (prior["ips"] <= prior["ips"].quantile(0.25)).astype(int)
+prior["ipp_baixo"] = (prior["ipp"] <= prior["ipp"].quantile(0.25)).astype(int)
+
+pattern_table = (
+    prior.groupby(["ips_baixo", "ipp_baixo"], as_index=False)
+    .agg(
+        alunos=("ra", "nunique"),
+        prob_queda_ida=("queda_ida_relevante", "mean"),
+        prob_queda_ieg=("queda_ieg_relevante", "mean"),
+        prob_queda_ian=("queda_ian_relevante", "mean"),
+    )
+    .sort_values(["ips_baixo", "ipp_baixo"])
+)
+for col in ["prob_queda_ida", "prob_queda_ieg", "prob_queda_ian"]:
+    pattern_table[col] = pattern_table[col] * 100
+
+pattern_table["perfil_ips_ipp"] = np.select(
+    [
+        (pattern_table["ips_baixo"] == 1) & (pattern_table["ipp_baixo"] == 1),
+        (pattern_table["ips_baixo"] == 1) & (pattern_table["ipp_baixo"] == 0),
+        (pattern_table["ips_baixo"] == 0) & (pattern_table["ipp_baixo"] == 1),
+        (pattern_table["ips_baixo"] == 0) & (pattern_table["ipp_baixo"] == 0),
+    ],
+    [
+        "IPS baixo + IPP baixo",
+        "IPS baixo + IPP nao baixo",
+        "IPS nao baixo + IPP baixo",
+        "IPS nao baixo + IPP nao baixo",
+    ],
+    default="Perfil nao classificado",
+)
+
+pattern_display = pattern_table[
+    [
+        "perfil_ips_ipp",
+        "alunos",
+        "prob_queda_ida",
+        "prob_queda_ieg",
+        "prob_queda_ian",
+    ]
+].sort_values("perfil_ips_ipp")
+display(pattern_display.round(2))
+
+pattern_plot = pattern_table.melt(
+    id_vars=["perfil_ips_ipp", "alunos"],
+    value_vars=["prob_queda_ida", "prob_queda_ieg", "prob_queda_ian"],
+    var_name="evento",
+    value_name="probabilidade",
+)
+
+event_name_map = {
+    "prob_queda_ida": "Queda relevante em IDA (>= 1 ponto)",
+    "prob_queda_ieg": "Queda relevante em IEG (>= 1 ponto)",
+    "prob_queda_ian": "Queda relevante em IAN (>= 1 ponto)",
+}
+pattern_plot["evento"] = pattern_plot["evento"].map(event_name_map)
+pattern_plot["rotulo"] = pattern_plot["probabilidade"].map(lambda v: f"{v:.1f}%")
+
+profile_order = [
+    "IPS nao baixo + IPP nao baixo",
+    "IPS baixo + IPP nao baixo",
+    "IPS nao baixo + IPP baixo",
+    "IPS baixo + IPP baixo",
+]
+pattern_plot["perfil_ips_ipp"] = pd.Categorical(pattern_plot["perfil_ips_ipp"], categories=profile_order, ordered=True)
+pattern_plot = pattern_plot.sort_values(["perfil_ips_ipp", "evento"])
+
+fig_pattern = px.bar(
+    pattern_plot,
+    x="perfil_ips_ipp",
+    y="probabilidade",
+    color="evento",
+    barmode="group",
+    text="rotulo",
+    title="Q5 - Probabilidade de queda no ano seguinte por perfil IPS/IPP",
+    labels={
+        "perfil_ips_ipp": "Perfil combinado de IPS e IPP no ano base",
+        "probabilidade": "Probabilidade de queda no ano seguinte (%)",
+        "evento": "Evento futuro",
+    },
+    color_discrete_map={
+        "Queda relevante em IDA (>= 1 ponto)": "#1D3557",
+        "Queda relevante em IEG (>= 1 ponto)": "#2A9D8F",
+        "Queda relevante em IAN (>= 1 ponto)": "#E76F51",
+    },
+)
+fig_pattern.update_traces(textposition="outside")
+fig_pattern.update_layout(xaxis_tickangle=-20)
+fig_pattern.show()
+
+# Q6: IPP confirma ou contradiz IAN
+prior["perfil_ipp_clinico"] = np.where(prior["ipp"] <= 7, "IPP fragil (<= 7)", "IPP adequado (> 7)")
+prior["perfil_ian_clinico"] = np.where(
+    prior["ian"] <= 5,
+    "IAN com defasagem alta (<= 5)",
+    "IAN sem defasagem alta (> 5)",
+)
+
+ipp_ian_matrix = pd.crosstab(prior["perfil_ipp_clinico"], prior["perfil_ian_clinico"], normalize="index") * 100
+display(ipp_ian_matrix.round(2))
+
+contradiction_rate = (
+    ((prior["ipp"] > 7) & (prior["ian"] <= 5))
+    | ((prior["ipp"] <= 7) & (prior["ian"] > 5))
+).mean() * 100
+print(f"Taxa de contradicao entre IPP e IAN: {contradiction_rate:.1f}%")
+
+fig_ipp_ian = px.imshow(
+    ipp_ian_matrix,
+    text_auto=".1f",
+    aspect="auto",
+    color_continuous_scale=["#F1FAEE", "#A8DADC", "#1D3557"],
+    title="Q6 - Distribuicao percentual de IAN dentro de cada perfil de IPP",
+    labels={
+        "x": "Perfil de IAN",
+        "y": "Perfil de IPP",
+        "color": "Percentual de alunos (%)",
+    },
+)
+fig_ipp_ian.show()
+
+
+
+========================================================================================================================
+CELL 27
+========================================================================================================================
+ipv_features = ["ida", "ieg", "iaa", "ips", "ipp", "ian"]
+ipv_data = df.dropna(subset=ipv_features + ["ipv"]).copy()
+
+if len(ipv_data) >= 100:
+    rf_ipv = RandomForestRegressor(
+        n_estimators=500,
+        max_depth=8,
+        min_samples_leaf=5,
+        random_state=42,
+        n_jobs=-1,
+    )
+    rf_ipv.fit(ipv_data[ipv_features], ipv_data["ipv"])
+
+    feature_name_map = {
+        "ida": "IDA - desempenho academico",
+        "ieg": "IEG - engajamento",
+        "iaa": "IAA - autoavaliacao",
+        "ips": "IPS - indice psicossocial",
+        "ipp": "IPP - indice psicopedagogico",
+        "ian": "IAN - adequacao de nivel",
+    }
+
+    ipv_importance = pd.DataFrame(
+        {
+            "indicador": ipv_features,
+            "importancia": rf_ipv.feature_importances_,
+        }
+    ).sort_values("importancia", ascending=False)
+    ipv_importance["indicador"] = ipv_importance["indicador"].map(feature_name_map)
+
+    display(ipv_importance.round(4))
+
+    fig_ipv_imp = px.bar(
+        ipv_importance,
+        x="importancia",
+        y="indicador",
+        orientation="h",
+        text=ipv_importance["importancia"].map(lambda v: f"{v:.3f}"),
+        title="Importancia relativa dos indicadores para explicar o IPV",
+        labels={
+            "importancia": "Importancia relativa",
+            "indicador": "Indicador analisado",
+        },
+        color_discrete_sequence=["#2A9D8F"],
+    )
+    fig_ipv_imp.update_layout(yaxis={"categoryorder": "total ascending"}, showlegend=False)
+    fig_ipv_imp.update_traces(textposition="outside")
+    fig_ipv_imp.show()
+else:
+    print("Amostra insuficiente para estimar importancia de IPV com robustez.")
+
+
+
+========================================================================================================================
+CELL 30
+========================================================================================================================
+multi_features = ["ida", "ieg", "ips", "ipp"]
+multi_df = df.dropna(subset=multi_features + ["inde_ano"]).copy()
+
+if len(multi_df) >= 150:
+    X_train, X_test, y_train, y_test = train_test_split(
+        multi_df[multi_features],
+        multi_df["inde_ano"],
+        test_size=0.25,
+        random_state=42,
+    )
+
+    rf_inde = RandomForestRegressor(
+        n_estimators=600,
+        max_depth=8,
+        min_samples_leaf=6,
+        random_state=42,
+        n_jobs=-1,
+    )
+    rf_inde.fit(X_train, y_train)
+
+    indicator_name_map = {
+        "ida": "IDA - desempenho academico",
+        "ieg": "IEG - engajamento",
+        "ips": "IPS - indice psicossocial",
+        "ipp": "IPP - indice psicopedagogico",
+    }
+
+    importance_inde = pd.DataFrame(
+        {
+            "indicador": multi_features,
+            "importancia": rf_inde.feature_importances_,
+        }
+    ).sort_values("importancia", ascending=False)
+    importance_inde["indicador"] = importance_inde["indicador"].map(indicator_name_map)
+
+    r2_train = rf_inde.score(X_train, y_train)
+    r2_test = rf_inde.score(X_test, y_test)
+
+    print(f"R2 treino (INDE): {r2_train:.3f}")
+    print(f"R2 teste  (INDE): {r2_test:.3f}")
+    display(importance_inde.round(4))
+
+    fig_import_inde = px.bar(
+        importance_inde,
+        x="importancia",
+        y="indicador",
+        orientation="h",
+        text=importance_inde["importancia"].map(lambda v: f"{v:.3f}"),
+        title="Importancia relativa para explicar o INDE",
+        labels={
+            "importancia": "Importancia relativa",
+            "indicador": "Indicador analisado",
+        },
+        color_discrete_sequence=["#457B9D"],
+    )
+    fig_import_inde.update_layout(yaxis={"categoryorder": "total ascending"}, showlegend=False)
+    fig_import_inde.update_traces(textposition="outside")
+    fig_import_inde.show()
+else:
+    print("Amostra insuficiente para analise robusta da multidimensionalidade.")
+
+# Perfis combinados (tercis) para leitura gerencial
+profile_df = multi_df.copy()
+for col in multi_features:
+    profile_df[f"{col}_faixa"] = pd.qcut(profile_df[col], q=3, labels=["Baixo", "Intermediario", "Alto"], duplicates="drop")
+
+profile_summary = (
+    profile_df.groupby(["ida_faixa", "ieg_faixa", "ips_faixa", "ipp_faixa"], as_index=False)
+    .agg(media_inde=("inde_ano", "mean"), alunos=("ra", "nunique"))
+    .sort_values(["media_inde", "alunos"], ascending=[False, False])
+)
+
+profile_summary = profile_summary[profile_summary["alunos"] >= 15]
+print("Top combinacoes de perfil (minimo de 15 alunos):")
+display(profile_summary.head(10).round(3))
+
+
+
+========================================================================================================================
+CELL 33
+========================================================================================================================
+risk_features = ["ian", "ida", "ieg", "iaa", "ips", "ipp", "ipv", "inde_ano", "defasagem"]
+risk_base = df_long[df_long["ano_base"].isin([2022, 2023])].copy()
+
+risk_base["risco_defasagem_prox"] = (
+    (risk_base["ian_prox"] <= 5)
+    | (risk_base["delta_ian_prox"] <= -1)
+).astype(int)
+
+risk_model_df = risk_base.dropna(subset=risk_features + ["ian_prox"]).copy()
+
+if len(risk_model_df) >= 200 and risk_model_df["risco_defasagem_prox"].nunique() == 2:
+    X_train, X_test, y_train, y_test = train_test_split(
+        risk_model_df[risk_features],
+        risk_model_df["risco_defasagem_prox"],
+        test_size=0.30,
+        random_state=42,
+        stratify=risk_model_df["risco_defasagem_prox"],
+    )
+
+    rf_risk = RandomForestClassifier(
+        n_estimators=500,
+        max_depth=7,
+        min_samples_leaf=8,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1,
+    )
+    rf_risk.fit(X_train, y_train)
+
+    prob_test = rf_risk.predict_proba(X_test)[:, 1]
+    roc_auc = roc_auc_score(y_test, prob_test)
+    pr_auc = average_precision_score(y_test, prob_test)
+
+    print(f"ROC-AUC (teste): {roc_auc:.3f}")
+    print(f"PR-AUC  (teste): {pr_auc:.3f}")
+
+    risk_importance = pd.DataFrame(
+        {
+            "feature": risk_features,
+            "importance": rf_risk.feature_importances_,
+        }
+    ).sort_values("importance", ascending=False)
+    display(risk_importance.round(4))
+
+    test_scored = X_test.copy()
+    test_scored["prob_risco"] = prob_test
+    test_scored["risco_real"] = y_test.values
+
+    bins = pd.cut(
+        test_scored["prob_risco"],
+        bins=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
+        include_lowest=True,
+    )
+    calibration = (
+        test_scored.groupby(bins, as_index=False)
+        .agg(alunos=("risco_real", "size"), taxa_real=("risco_real", "mean"), prob_media=("prob_risco", "mean"))
+    )
+    calibration["taxa_real"] = calibration["taxa_real"] * 100
+    calibration["prob_media"] = calibration["prob_media"] * 100
+    display(calibration.round(2))
+else:
+    print("Amostra insuficiente para baseline de risco nesta visao EDA. Consulte o notebook de modelo preditivo.")
+
+
+========================================================================================================================
+CELL 36
+========================================================================================================================
+program = df.dropna(subset=["ra", "ano_referencia", "pedra_ano"]).copy()
+program = program[program["pedra_ano"].isin(["Quartzo", "Agata", "Ametista", "Topazio"])]
+
+phase_metrics = (
+    program.groupby(["pedra_ano", "ano_referencia"], as_index=False)
+    .agg(
+        alunos=("ra", "nunique"),
+        media_inde=("inde_ano", "mean"),
+        media_ida=("ida", "mean"),
+        media_ieg=("ieg", "mean"),
+        percentual_ian_defasado=("ian", lambda s: (s <= 5).mean() * 100),
+    )
+    .sort_values(["pedra_ano", "ano_referencia"])
+)
+display(phase_metrics.round(3))
+
+phase_plot = phase_metrics.copy()
+phase_plot["ano_referencia"] = phase_plot["ano_referencia"].astype(int).astype(str)
+
+phase_order = ["Quartzo", "Agata", "Ametista", "Topazio"]
+phase_color_map = {
+    "Quartzo": "#A4B3D3",
+    "Agata": "#8092AC",
+    "Ametista": "#08286F",
+    "Topazio": "#00164D",
+}
+phase_plot["pedra_ano"] = pd.Categorical(phase_plot["pedra_ano"], categories=phase_order, ordered=True)
+phase_plot = phase_plot.sort_values(["ano_referencia", "pedra_ano"])
+
+fig_phase_inde = px.bar(
+    phase_plot,
+    x="ano_referencia",
+    y="media_inde",
+    color="pedra_ano",
+    barmode="group",
+    text="media_inde",
+    title="Efetividade por fase: evolucao do INDE",
+    labels={
+        "ano_referencia": "Ano de referencia",
+        "media_inde": "INDE medio",
+        "pedra_ano": "Fase do programa (pedra)",
+    },
+    category_orders={"pedra_ano": phase_order, "ano_referencia": ["2022", "2023", "2024"]},
+    color_discrete_map=phase_color_map,
+)
+fig_phase_inde.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+fig_phase_inde.update_xaxes(type="category")
+fig_phase_inde.update_yaxes(range=[0, phase_plot["media_inde"].max() + 1.0])
+fig_phase_inde.show()
+
+fig_phase_risk = px.bar(
+    phase_plot,
+    x="ano_referencia",
+    y="percentual_ian_defasado",
+    color="pedra_ano",
+    barmode="group",
+    text="percentual_ian_defasado",
+    title="Efetividade por fase: risco de defasagem (IAN <= 5)",
+    labels={
+        "ano_referencia": "Ano de referencia",
+        "percentual_ian_defasado": "Alunos com IAN <= 5 (%)",
+        "pedra_ano": "Fase do programa (pedra)",
+    },
+    category_orders={"pedra_ano": phase_order, "ano_referencia": ["2022", "2023", "2024"]},
+    color_discrete_map=phase_color_map,
+)
+fig_phase_risk.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+fig_phase_risk.update_xaxes(type="category")
+fig_phase_risk.update_yaxes(range=[0, phase_plot["percentual_ian_defasado"].max() + 8])
+fig_phase_risk.show()
+
+# Visao de coorte por pedra inicial
+cohort = program.dropna(subset=["inde_ano"]).copy()
+first_record = (
+    cohort.sort_values(["ra", "ano_referencia"])
+    .groupby("ra", as_index=False)
+    .first()[["ra", "pedra_ano"]]
+    .rename(columns={"pedra_ano": "pedra_inicial"})
+)
+cohort = cohort.merge(first_record, on="ra", how="left")
+
+cohort_evolution = (
+    cohort.groupby(["pedra_inicial", "ano_referencia"], as_index=False)
+    .agg(media_inde=("inde_ano", "mean"), alunos=("ra", "nunique"))
+)
+
+stone_order = ["Quartzo", "Agata", "Ametista", "Topazio"]
+cohort_evolution["pedra_inicial"] = pd.Categorical(cohort_evolution["pedra_inicial"], categories=stone_order, ordered=True)
+cohort_evolution = cohort_evolution.sort_values(["pedra_inicial", "ano_referencia"])
+display(cohort_evolution.round(3))
+
+cohort_plot = cohort_evolution.copy()
+cohort_plot["ano_referencia"] = cohort_plot["ano_referencia"].astype(int).astype(str)
+
+cohort_label_map = {
+    "Quartzo": "Quartzo",
+    "Agata": "Agata",
+    "Ametista": "Ametista",
+    "Topazio": "Topazio",
+}
+cohort_plot["coorte_inicial_rotulo"] = cohort_plot["pedra_inicial"].map(cohort_label_map)
+cohort_order_label = ["Quartzo", "Agata", "Ametista", "Topazio"]
+cohort_color_map = {
+    "Quartzo": "#A4B3D3",
+    "Agata": "#8092AC",
+    "Ametista": "#08286F",
+    "Topazio": "#00164D",
+}
+cohort_plot["coorte_inicial_rotulo"] = pd.Categorical(
+    cohort_plot["coorte_inicial_rotulo"],
+    categories=cohort_order_label,
+    ordered=True,
+)
+cohort_plot = cohort_plot.sort_values(["ano_referencia", "coorte_inicial_rotulo"])
+
+fig_cohort = px.bar(
+    cohort_plot,
+    x="ano_referencia",
+    y="media_inde",
+    color="coorte_inicial_rotulo",
+    barmode="group",
+    text="media_inde",
+    title="Evolucao do INDE por coorte da pedra inicial",
+    labels={
+        "ano_referencia": "Ano de referencia",
+        "media_inde": "INDE medio",
+        "coorte_inicial_rotulo": "Coorte inicial",
+    },
+    category_orders={"coorte_inicial_rotulo": cohort_order_label, "ano_referencia": ["2022", "2023", "2024"]},
+    color_discrete_map=cohort_color_map,
+)
+fig_cohort.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+fig_cohort.update_xaxes(type="category")
+fig_cohort.update_yaxes(range=[0, cohort_plot["media_inde"].max() + 1.0])
+fig_cohort.show()
+
+
+========================================================================================================================
+CELL 39
+========================================================================================================================
+ian_risk = (
+    df.dropna(subset=["ian"])
+    .groupby("ano_referencia")["ian"]
+    .apply(lambda s: (s <= 5).mean() * 100)
+    .sort_index()
+)
+ida_means = df.dropna(subset=["ida"]).groupby("ano_referencia")["ida"].mean().sort_index()
+delta_ida = ida_means.iloc[-1] - ida_means.iloc[0] if len(ida_means) >= 2 else np.nan
+
+global_corr = df[["ieg", "ida", "ipp", "ian", "ips", "ipv", "inde_ano"]].corr(method="spearman")
+corr_ieg_ida = global_corr.loc["ieg", "ida"]
+corr_ipp_ian = global_corr.loc["ipp", "ian"]
+
+cohort_delta = (
+    cohort_evolution.groupby("pedra_inicial")
+    .apply(lambda x: x.sort_values("ano_referencia")["media_inde"].iloc[-1] - x.sort_values("ano_referencia")["media_inde"].iloc[0])
+    .dropna()
+)
+
+question_checklist = pd.DataFrame(
+    [
+        {"pergunta": "Q1 - IAN", "status": "Respondida", "evidencia": "Evolucao anual + composicao de perfis + recorte por sexo e idade"},
+        {"pergunta": "Q2 - IDA", "status": "Respondida", "evidencia": "Evolucao de media anual + distribuicao sem mediana"},
+        {"pergunta": "Q3 - IEG x IDA/IPV", "status": "Respondida", "evidencia": "Correlacoes Spearman por ano + dispersao com linha de tendencia"},
+        {"pergunta": "Q4 - IAA coerente?", "status": "Respondida", "evidencia": "Desvio de autoavaliacao frente a media objetiva (IDA e IEG)"},
+        {"pergunta": "Q5 - IPS antecede quedas?", "status": "Respondida", "evidencia": "Probabilidade de queda futura por perfis combinados de IPS/IPP"},
+        {"pergunta": "Q6 - IPP confirma IAN?", "status": "Respondida", "evidencia": "Matriz percentual IPP x IAN + taxa de contradicao"},
+        {"pergunta": "Q7 - Drivers do IPV", "status": "Respondida", "evidencia": "Importancia relativa dos indicadores com Random Forest"},
+        {"pergunta": "Q8 - Multidimensionalidade", "status": "Respondida", "evidencia": "Modelo explicativo do INDE + perfis combinados"},
+        {"pergunta": "Q9 - Previsao de risco", "status": "Respondida", "evidencia": "Baseline RF com ROC-AUC, PR-AUC e importancias"},
+        {"pergunta": "Q10 - Efetividade do programa", "status": "Respondida", "evidencia": "Tendencia por fase e por coorte inicial"},
+        {"pergunta": "Q11 - Insights e criatividade", "status": "Respondida", "evidencia": "Sintese executiva com recomendacoes acionaveis"},
+    ]
+)
+display(question_checklist)
+
+insight_text = f"""
+### Principais achados
+
+- **Risco de defasagem (IAN <= 5):**
+  - 2022: {ian_risk.get(2022, np.nan):.1f}%
+  - 2023: {ian_risk.get(2023, np.nan):.1f}%
+  - 2024: {ian_risk.get(2024, np.nan):.1f}%
+- **Tendencia de IDA (2022 -> 2024):** variacao media de **{delta_ida:.2f}** pontos.
+- **Relacao IEG x IDA:** Spearman = **{corr_ieg_ida:.2f}**.
+- **Relacao IPP x IAN:** Spearman = **{corr_ipp_ian:.2f}**.
+- **Coortes por pedra (delta INDE no periodo):**
+  {cohort_delta.round(2).to_string() if not cohort_delta.empty else 'Sem dados suficientes para coorte.'}
+
+### Recomendacoes para a ONG
+
+1. Priorizar trilhas de intervencao para alunos com **IAN <= 5** combinando reforco academico e suporte psicopedagogico.
+2. Criar alertas preventivos quando houver queda conjunta de **IEG** e **IPP**, pois esse padrao se associa a maior risco no ano seguinte.
+3. Usar **IEG** como indicador de acao rapida, por sua associacao consistente com desempenho academico e ponto de virada.
+4. Em alunos com desvio alto de autoavaliacao (IAA), aplicar devolutiva orientada para calibrar percepcao e metas.
+5. Operacionalizar o baseline de risco em rotina mensal para priorizacao de acompanhamento individual.
+"""
+display(Markdown(insight_text))
+
+
