@@ -137,7 +137,7 @@ def main() -> None:
         render_analise_exploratoria_tab(df, df_long)
 
     with tab_modelo:
-        render_modelo_preditivo_tab()
+        render_modelo_preditivo_tab(df)
 
 
 if __name__ == "__main__":

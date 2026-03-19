@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+import re
 
 import numpy as np
 import pandas as pd
@@ -15,29 +17,180 @@ DIVERGING_SCALE = "RdBu"
 SEQUENTIAL_SCALE = ["#F1FAEE", "#A8DADC", "#1D3557"]
 YEAR_COLOR_MAP = {"2022": "#1D3557", "2023": "#457B9D", "2024": "#2A9D8F"}
 px.defaults.color_discrete_sequence = COLOR_SEQUENCE
+_graph_counter = 0
+
+ABBREVIATION_FULL_NAME_MAP = {
+    "INDE": "Índice de Desenvolvimento Educacional",
+    "IAN": "Índice de Adequação de Nível",
+    "IDA": "Indicador de Desempenho Acadêmico",
+    "IEG": "Indicador de Engajamento",
+    "IAA": "Indicador de Autoavaliação",
+    "IPS": "Índice Psicossocial",
+    "IPP": "Índice Psicopedagógico",
+    "IPV": "Indicador de Ponto de Virada",
+}
+
+
+def expand_abbreviations(text: str | None) -> str | None:
+    if text is None:
+        return None
+    expanded = str(text)
+    for abbr, full_name in ABBREVIATION_FULL_NAME_MAP.items():
+        expanded = re.sub(rf"\b{abbr}\b(?!\s*\()", f"{abbr} ({full_name})", expanded)
+    return expanded
+
+
+def _expand_sequence_values(values):
+    if values is None:
+        return values
+    if isinstance(values, str):
+        return expand_abbreviations(values)
+    if isinstance(values, np.ndarray):
+        if values.dtype.kind in {"U", "S", "O"}:
+            return np.array([expand_abbreviations(v) if isinstance(v, str) else v for v in values], dtype=object)
+        return values
+    if isinstance(values, (list, tuple, pd.Series)):
+        return [expand_abbreviations(v) if isinstance(v, str) else v for v in values]
+    return values
+
+
+def apply_full_names_to_figure(fig: go.Figure) -> None:
+    if fig.layout.title is not None and fig.layout.title.text:
+        fig.layout.title.text = expand_abbreviations(str(fig.layout.title.text))
+
+    if fig.layout.legend and fig.layout.legend.title and fig.layout.legend.title.text:
+        fig.layout.legend.title.text = expand_abbreviations(str(fig.layout.legend.title.text))
+
+    for layout_key in fig.layout:
+        if isinstance(layout_key, str) and (layout_key.startswith("xaxis") or layout_key.startswith("yaxis")):
+            axis_cfg = fig.layout[layout_key]
+            if axis_cfg and axis_cfg.title and axis_cfg.title.text:
+                axis_cfg.title.text = expand_abbreviations(str(axis_cfg.title.text))
+
+    if fig.layout.coloraxis and fig.layout.coloraxis.colorbar and fig.layout.coloraxis.colorbar.title and fig.layout.coloraxis.colorbar.title.text:
+        fig.layout.coloraxis.colorbar.title.text = expand_abbreviations(str(fig.layout.coloraxis.colorbar.title.text))
+
+    if fig.layout.annotations:
+        for ann in fig.layout.annotations:
+            if ann.text:
+                ann.text = expand_abbreviations(str(ann.text))
+
+    for trace in fig.data:
+        if hasattr(trace, "name") and isinstance(trace.name, str):
+            trace.name = expand_abbreviations(trace.name)
+        if hasattr(trace, "hovertemplate") and isinstance(trace.hovertemplate, str):
+            trace.hovertemplate = expand_abbreviations(trace.hovertemplate)
+        if hasattr(trace, "texttemplate") and isinstance(trace.texttemplate, str):
+            trace.texttemplate = expand_abbreviations(trace.texttemplate)
+        if hasattr(trace, "x"):
+            trace.x = _expand_sequence_values(trace.x)
+        if hasattr(trace, "y"):
+            trace.y = _expand_sequence_values(trace.y)
+        if hasattr(trace, "text"):
+            trace.text = _expand_sequence_values(trace.text)
+        if hasattr(trace, "hovertext"):
+            trace.hovertext = _expand_sequence_values(trace.hovertext)
+
+
+def show_subheader(text: str) -> None:
+    st.subheader(expand_abbreviations(text))
+
+
+def show_caption(text: str) -> None:
+    st.caption(expand_abbreviations(text))
+
+
+
+def reset_graph_counter() -> None:
+    global _graph_counter
+    _graph_counter = 0
+
+
+def plotly_chart_numbered(
+    fig: go.Figure,
+    note: str | None = None,
+    analysis: str | None = None,
+    practical_meaning: str | None = None,
+    *,
+    apply_full_names: bool = True,
+    prefix_title: bool = True,
+) -> int:
+    if apply_full_names:
+        apply_full_names_to_figure(fig)
+
+    global _graph_counter
+    _graph_counter += 1
+    graph_number = _graph_counter
+
+    if prefix_title:
+        current_title = ""
+        if fig.layout.title is not None and fig.layout.title.text:
+            current_title = str(fig.layout.title.text)
+        title_prefix = f"Gráfico {graph_number}"
+        fig.update_layout(title=f"{title_prefix} - {current_title}" if current_title else title_prefix)
+
+    st.plotly_chart(fig, use_container_width=True)
+    if note:
+        show_caption(f"Referência: Gráfico {graph_number}. {note}")
+    else:
+        show_caption(f"Referência: Gráfico {graph_number}.")
+    if analysis or practical_meaning:
+        render_graph_note(
+            analysis=analysis or "Leitura descritiva não informada.",
+            practical_meaning=practical_meaning or "Interpretação prática não informada.",
+        )
+    return graph_number
+
+
+
+
+def format_graph_refs(graph_refs: list[int] | None) -> str:
+    if not graph_refs:
+        return "Sem base gráfica."
+    unique_refs = sorted(set(graph_refs))
+    return ", ".join([f"Gráfico {n}" for n in unique_refs])
+
+
 def render_analysis_header(question: str, importance: str, approach: str) -> None:
-    st.markdown(f"**Pergunta orientadora:** {question}")
+    st.markdown(f"**Pergunta orientadora:** {expand_abbreviations(question)}")
     c1, c2 = st.columns(2)
-    c1.markdown(f"**Por que importa:** {importance}")
-    c2.markdown(f"**Como foi analisado:** {approach}")
+    c1.markdown(f"**Por que importa:** {expand_abbreviations(importance)}")
+    c2.markdown(f"**Como foi analisado:** {expand_abbreviations(approach)}")
 
 
-def render_exec_note(message: str, implication: str) -> None:
+def render_exec_note(message: str, implication: str, graph_refs: list[int] | None = None) -> None:
+    refs_text = format_graph_refs(graph_refs)
     st.markdown(
         f"""
         <div class="eda-note">
         <strong>Conclusão</strong><br>
-        {message}<br><br>
+        {expand_abbreviations(message)}<br><br>
         <strong>Implicação prática</strong><br>
-        {implication}
+        {expand_abbreviations(implication)}<br><br>
+        <strong>Base visual</strong><br>
+        {refs_text}
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-def render_corr(df: pd.DataFrame) -> None:
-    st.subheader("Matriz de correlação")
+def render_graph_note(analysis: str, practical_meaning: str) -> None:
+    st.markdown(
+        f"""
+        <div class="eda-note">
+        <strong>Leitura do gráfico</strong><br>
+        {expand_abbreviations(analysis)}<br><br>
+        <strong>O que isso significa na prática</strong><br>
+        {expand_abbreviations(practical_meaning)}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_corr(df: pd.DataFrame) -> int:
+    show_subheader("Matriz de correlação")
     corr_features = [
         "inde_ano",
         "ian",
@@ -80,12 +233,26 @@ def render_corr(df: pd.DataFrame) -> None:
         title="Matriz de correlacao de Spearman - indicadores consolidados",
     )
     fig_corr.update_layout(coloraxis_colorbar={"title": "rho (Spearman)"})
-    st.plotly_chart(fig_corr, use_container_width=True)
-    st.caption("Obs.: cores mais intensas indicam relações mais fortes.")
+    graph_ref = plotly_chart_numbered(
+        fig_corr,
+        "Cores mais intensas indicam relações mais fortes.",
+        analysis=(
+            "As correlações mais fortes aparecem no bloco acadêmico-comportamental, "
+            "indicando que desempenho e engajamento caminham juntos na base."
+        ),
+        practical_meaning=(
+            "Na prática, a gestão deve priorizar ações que melhorem desempenho acadêmico e engajamento ao mesmo tempo, "
+            "porque esse conjunto tende a gerar efeito sistêmico no indicador global."
+        ),
+        apply_full_names=False,
+        prefix_title=False,
+    )
+    return graph_ref
 
 
-def render_q1(df: pd.DataFrame) -> None:
-    st.subheader("Q1 - IAN: defasagem e evolução temporal")
+def render_q1(df: pd.DataFrame) -> dict[str, int]:
+    show_subheader("Q1 - IAN: defasagem e evolução temporal")
+    graph_refs: dict[str, int] = {}
     ian_summary = (
         df.dropna(subset=["ian"])
         .groupby("ano_referencia", as_index=False)
@@ -111,8 +278,17 @@ def render_q1(df: pd.DataFrame) -> None:
     )
     fig_ian_line.update_traces(textposition="top center")
     fig_ian_line.update_xaxes(type="category")
-    st.plotly_chart(fig_ian_line, use_container_width=True)
-    st.caption("O IAN médio mostra tendência de melhoria no período.")
+    graph_refs["ian_linha"] = plotly_chart_numbered(
+        fig_ian_line,
+        "O IAN médio mostra tendência de melhoria no período.",
+        analysis=(
+            "A curva do IAN médio sobe ao longo dos anos, sugerindo recuperação gradual do nível de aprendizagem."
+        ),
+        practical_meaning=(
+            "Isso indica ganho estrutural do programa; a ONG deve preservar as ações que sustentaram essa subida "
+            "e evitar descontinuidade no acompanhamento."
+        ),
+    )
 
     def classificar_faixa_ian(value: float) -> str:
         if pd.isna(value):
@@ -169,8 +345,17 @@ def render_q1(df: pd.DataFrame) -> None:
         categoryarray=sorted(ian_mix["ano_referencia"].unique().tolist()),
     )
     fig_ian_mix.update_yaxes(range=[0, 100])
-    st.plotly_chart(fig_ian_mix, use_container_width=True)
-    st.caption("A redução da faixa de defasagem alta e o avanço da faixa adequada são sinais de evolução estrutural.")
+    graph_refs["ian_mix"] = plotly_chart_numbered(
+        fig_ian_mix,
+        "A redução da faixa de defasagem alta e o avanço da faixa adequada são sinais de evolução estrutural.",
+        analysis=(
+            "A participação de alunos na faixa de defasagem alta diminui, enquanto a faixa adequada cresce no período."
+        ),
+        practical_meaning=(
+            "Na prática, há migração de risco para proficiência. O próximo passo é concentrar reforço "
+            "no grupo que permanece na faixa crítica para acelerar a convergência."
+        ),
+    )
 
     ian_by_gender = (
         df.dropna(subset=["ian", "genero"])
@@ -201,8 +386,17 @@ def render_q1(df: pd.DataFrame) -> None:
     )
     fig_ian_gender.update_traces(texttemplate="%{text:.0f}%", textposition="outside")
     fig_ian_gender.update_xaxes(type="category")
-    st.plotly_chart(fig_ian_gender, use_container_width=True)
-    st.caption("O recorte por sexo ajuda a identificar grupos com maior necessidade de apoio pedagógico.")
+    graph_refs["ian_genero"] = plotly_chart_numbered(
+        fig_ian_gender,
+        "O recorte por sexo ajuda a identificar grupos com maior necessidade de apoio pedagógico.",
+        analysis=(
+            "O recorte por sexo revela diferenças persistentes nas taxas de defasagem alta entre os grupos."
+        ),
+        practical_meaning=(
+            "Isso significa que metas agregadas podem esconder desigualdades; a gestão precisa definir "
+            "metas segmentadas por sexo e monitorar o fechamento desses gaps."
+        ),
+    )
 
     ian_gender_pivot = ian_by_gender.pivot(index="genero", columns="ano_referencia", values="percentual_defasagem_alta")
     variation_rows = []
@@ -243,7 +437,17 @@ def render_q1(df: pd.DataFrame) -> None:
             hovertemplate="Periodo comparado=%{x}<br>Variacao da taxa de IAN <= 5 (p.p.)=%{y:+.0f}<extra></extra>",
         )
         fig_gender_variation.add_hline(y=0, line_dash="dash", line_color="#264653")
-        st.plotly_chart(fig_gender_variation, use_container_width=True)
+        graph_refs["ian_variacao_genero"] = plotly_chart_numbered(
+            fig_gender_variation,
+            "A variação entre períodos mostra ritmo de melhora distinto entre os sexos.",
+            analysis=(
+                "A velocidade de queda da defasagem não é igual entre os sexos em todos os períodos analisados."
+            ),
+            practical_meaning=(
+                "Na prática, a intensidade da intervenção deve ser calibrada por grupo para evitar que um segmento "
+                "avance menos e mantenha bolsões de risco."
+            ),
+        )
 
     age_analysis = df.dropna(subset=["ian", "idade"]).copy()
     age_analysis["faixa_etaria"] = pd.cut(age_analysis["idade"], bins=[0, 10, 13, 16, 30], labels=["7-10 anos", "11-13 anos", "14-16 anos", "17+ anos"])
@@ -278,12 +482,23 @@ def render_q1(df: pd.DataFrame) -> None:
     fig_ian_age.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
     fig_ian_age.update_xaxes(range=[0, 100])
     fig_ian_age.update_yaxes(categoryorder="array", categoryarray=["17+ anos", "14-16 anos", "11-13 anos", "7-10 anos"])
-    st.plotly_chart(fig_ian_age, use_container_width=True)
-    st.caption("A segmentação por faixa etária orienta ações direcionadas por ciclo de aprendizagem.")
+    graph_refs["ian_faixa_etaria"] = plotly_chart_numbered(
+        fig_ian_age,
+        "A segmentação por faixa etária orienta ações direcionadas por ciclo de aprendizagem.",
+        analysis=(
+            "As faixas etárias apresentam níveis diferentes de defasagem, com alguns ciclos concentrando maior risco."
+        ),
+        practical_meaning=(
+            "Isso pede trilhas pedagógicas por ciclo: reforço de base nas séries iniciais e recuperação intensiva "
+            "nas faixas com maior atraso acumulado."
+        ),
+    )
+    return graph_refs
 
 
-def render_q2(df: pd.DataFrame) -> None:
-    st.subheader("Q2 - IDA: melhora, estagnação ou queda")
+def render_q2(df: pd.DataFrame) -> dict[str, int]:
+    show_subheader("Q2 - IDA: melhora, estagnação ou queda")
+    graph_refs: dict[str, int] = {}
     ida_summary = (
         df.dropna(subset=["ida"])
         .groupby("ano_referencia", as_index=False)
@@ -307,8 +522,17 @@ def render_q2(df: pd.DataFrame) -> None:
     )
     fig_ida_line.update_traces(textposition="top center")
     fig_ida_line.update_xaxes(type="category")
-    st.plotly_chart(fig_ida_line, use_container_width=True)
-    st.caption("A série anual revela ganho inicial e necessidade de sustentação no último ano.")
+    graph_refs["ida_linha"] = plotly_chart_numbered(
+        fig_ida_line,
+        "A série anual revela ganho inicial e necessidade de sustentação no último ano.",
+        analysis=(
+            "O IDA melhora no início da janela e depois desacelera, indicando perda de ritmo no ganho acadêmico."
+        ),
+        practical_meaning=(
+            "Na prática, além de gerar melhora inicial, o programa precisa de mecanismos de sustentação "
+            "para evitar estagnação após os primeiros avanços."
+        ),
+    )
 
     ida_dist = df.dropna(subset=["ida", "ano_referencia"]).copy()
     ida_dist["ano_referencia"] = ida_dist["ano_referencia"].astype(int).astype(str)
@@ -328,12 +552,23 @@ def render_q2(df: pd.DataFrame) -> None:
     )
     fig_ida_violin.update_layout(showlegend=False)
     fig_ida_violin.update_xaxes(type="category")
-    st.plotly_chart(fig_ida_violin, use_container_width=True)
-    st.caption("A distribuição mostra heterogeneidade entre estudantes, além da média global.")
+    graph_refs["ida_distribuicao"] = plotly_chart_numbered(
+        fig_ida_violin,
+        "A distribuição mostra heterogeneidade entre estudantes, além da média global.",
+        analysis=(
+            "Mesmo com média favorável, a dispersão mostra grupos com trajetórias acadêmicas muito diferentes."
+        ),
+        practical_meaning=(
+            "Isso significa que só olhar média não basta; a ONG deve operar com trilhas por perfil "
+            "para reduzir desigualdade de aprendizagem."
+        ),
+    )
+    return graph_refs
 
 
-def render_q3(df: pd.DataFrame) -> None:
-    st.subheader("Q3 - IEG x IDA e IPV")
+def render_q3(df: pd.DataFrame) -> dict[str, int] | None:
+    show_subheader("Q3 - IEG x IDA e IPV")
+    graph_refs: dict[str, int] = {}
     corr_rows = []
     for year, part in df.groupby("ano_referencia"):
         sub = part[["ieg", "ida", "ipv"]].dropna()
@@ -345,6 +580,7 @@ def render_q3(df: pd.DataFrame) -> None:
                 "corr_ieg_ida": sub["ieg"].corr(sub["ida"], method="spearman"),
                 "corr_ieg_ipv": sub["ieg"].corr(sub["ipv"], method="spearman"),
                 "corr_ida_ipv": sub["ida"].corr(sub["ipv"], method="spearman"),
+                "alunos_validos": len(sub),
             }
         )
     corr_df = pd.DataFrame(corr_rows).sort_values("ano_referencia")
@@ -387,8 +623,17 @@ def render_q3(df: pd.DataFrame) -> None:
     fig_corr_q3.update_traces(textposition="outside")
     fig_corr_q3.update_xaxes(type="category")
     fig_corr_q3.update_yaxes(range=[0, corr_long["correlacao_spearman"].max() + 0.12])
-    st.plotly_chart(fig_corr_q3, use_container_width=True)
-    st.caption("As correlações positivas sustentam o uso do engajamento como sinal operacional de desempenho.")
+    graph_refs["q3_correlacoes"] = plotly_chart_numbered(
+        fig_corr_q3,
+        "As correlações positivas sustentam o uso do engajamento como sinal operacional de desempenho.",
+        analysis=(
+            "As correlações entre engajamento, desempenho acadêmico e ponto de virada se mantêm positivas entre os anos."
+        ),
+        practical_meaning=(
+            "Na prática, queda de engajamento é um alerta operacional antecipado. "
+            "Monitorar esse indicador continuamente ajuda a agir antes da queda de resultado."
+        ),
+    )
 
     scatter_df = df.dropna(subset=["ieg", "ida", "ipv", "ano_referencia"]).copy()
     scatter_df["ano_referencia"] = scatter_df["ano_referencia"].astype(int).astype(str)
@@ -424,8 +669,17 @@ def render_q3(df: pd.DataFrame) -> None:
                 line={"dash": "dash", "width": 2, "color": year_color_map.get(year_value, "#333333")},
             )
         )
-    st.plotly_chart(fig_scatter_ieg_ida, use_container_width=True)
-    st.caption("A inclinação positiva das linhas de tendência reforça a associação entre engajamento e resultado acadêmico.")
+    graph_refs["q3_disp_ieg_ida"] = plotly_chart_numbered(
+        fig_scatter_ieg_ida,
+        "A inclinação positiva das linhas de tendência reforça a associação entre engajamento e resultado acadêmico.",
+        analysis=(
+            "As linhas de tendência sobem em todos os anos, indicando que maior engajamento vem acompanhado de maior IDA."
+        ),
+        practical_meaning=(
+            "Isso sugere que políticas para elevar presença e participação têm efeito indireto sobre desempenho acadêmico, "
+            "não apenas sobre comportamento."
+        ),
+    )
 
     fig_scatter_ieg_ipv = px.scatter(
         scatter_df,
@@ -457,12 +711,22 @@ def render_q3(df: pd.DataFrame) -> None:
                 line={"dash": "dash", "width": 2, "color": year_color_map.get(year_value, "#333333")},
             )
         )
-    st.plotly_chart(fig_scatter_ieg_ipv, use_container_width=True)
-    st.caption("O padrão também aparece para IPV, indicando que engajamento antecede pontos de virada.")
+    graph_refs["q3_disp_ieg_ipv"] = plotly_chart_numbered(
+        fig_scatter_ieg_ipv,
+        "O padrão também aparece para IPV, indicando que engajamento antecede pontos de virada.",
+        analysis=(
+            "A relação positiva entre engajamento e IPV repete o padrão observado com IDA."
+        ),
+        practical_meaning=(
+            "Na prática, fortalecer engajamento aumenta a chance de ponto de virada favorável, "
+            "então esse eixo deve entrar cedo no plano de intervenção."
+        ),
+    )
+    return graph_refs
 
 
-def render_q4(df: pd.DataFrame) -> None:
-    st.subheader("Q4 - IAA: coerência com IDA e IEG")
+def render_q4(df: pd.DataFrame) -> int:
+    show_subheader("Q4 - IAA: coerência com IDA e IEG")
     coherence = df.dropna(subset=["iaa", "ida", "ieg"]).copy()
     coherence["media_objetiva_desempenho"] = coherence[["ida", "ieg"]].mean(axis=1)
     coherence["desvio_autoavaliacao"] = coherence["iaa"] - coherence["media_objetiva_desempenho"]
@@ -484,18 +748,29 @@ def render_q4(df: pd.DataFrame) -> None:
         color_discrete_sequence=["#1D3557", "#457B9D", "#2A9D8F"],
     )
     fig_coherence.add_vline(x=0, line_dash="dash", line_color="#264653")
-    st.plotly_chart(fig_coherence, use_container_width=True)
-    st.caption("Distribuições deslocadas para a direita indicam superestimação; para a esquerda, subestimação.")
+    graph_ref = plotly_chart_numbered(
+        fig_coherence,
+        "Distribuições deslocadas para a direita indicam superestimação; para a esquerda, subestimação.",
+        analysis=(
+            "A distribuição do desvio em torno de zero mostra coexistência de alunos que superestimam e subestimam seu desempenho."
+        ),
+        practical_meaning=(
+            "Isso significa que autoavaliação é útil, mas não pode ser lida isoladamente; "
+            "a decisão de intervenção deve combinar percepção do aluno com métricas objetivas."
+        ),
+    )
+    return graph_ref
 
 
-def render_q5_q6(df_long: pd.DataFrame) -> None:
-    st.subheader("Q5 e Q6 - IPS/IPP: antecedência e confirmação com IAN")
+def render_q5_q6(df_long: pd.DataFrame) -> dict[str, int] | None:
+    show_subheader("Q5 e Q6 - IPS/IPP: antecedência e confirmação com IAN")
+    graph_refs: dict[str, int] = {}
 
     prior = df_long[df_long["ano_base"].isin([2022, 2023])].copy()
     prior = prior.dropna(subset=["ida", "ida_prox", "ieg", "ieg_prox", "ips", "ipp", "ian", "ian_prox"])
     if prior.empty:
         st.info("Sem amostra suficiente para Q5/Q6.")
-        return
+        return None
 
     prior["queda_ida_relevante"] = (prior["delta_ida_prox"] <= -1.0).astype(int)
     prior["delta_ieg_prox"] = prior["ieg_prox"] - prior["ieg"]
@@ -524,7 +799,7 @@ def render_q5_q6(df_long: pd.DataFrame) -> None:
 
     risk_summary_df = pd.DataFrame(risk_summary)
     if not risk_summary_df.empty:
-        st.caption("Diferenças médias de IPS/IPP por evento futuro foram calculadas conforme o notebook de EDA.")
+        show_caption("Diferenças médias de IPS/IPP por evento futuro foram calculadas conforme o notebook de EDA.")
 
     prior["ips_baixo"] = (prior["ips"] <= prior["ips"].quantile(0.25)).astype(int)
     prior["ipp_baixo"] = (prior["ipp"] <= prior["ipp"].quantile(0.25)).astype(int)
@@ -600,8 +875,16 @@ def render_q5_q6(df_long: pd.DataFrame) -> None:
     )
     fig_pattern.update_traces(textposition="outside")
     fig_pattern.update_layout(xaxis_tickangle=-20)
-    st.plotly_chart(fig_pattern, use_container_width=True)
-    st.caption("O perfil combinado IPS baixo + IPP baixo concentra maior risco de deterioração no ano seguinte.")
+    graph_refs["q5_quedas_por_perfil"] = plotly_chart_numbered(
+        fig_pattern,
+        "O perfil combinado IPS baixo + IPP baixo concentra maior risco de deterioração no ano seguinte.",
+        analysis=(
+            "O gráfico mostra gradiente de risco: o perfil com fragilidade simultânea em IPS e IPP concentra as maiores quedas futuras."
+        ),
+        practical_meaning=(
+            "Na prática, esse grupo deve ser priorizado em protocolo preventivo com ação psicossocial e pedagógica integrada."
+        ),
+    )
 
     prior["perfil_ipp_clinico"] = np.where(prior["ipp"] <= 7, "IPP fragil (<= 7)", "IPP adequado (> 7)")
     prior["perfil_ian_clinico"] = np.where(prior["ian"] <= 5, "IAN com defasagem alta (<= 5)", "IAN sem defasagem alta (> 5)")
@@ -611,7 +894,7 @@ def render_q5_q6(df_long: pd.DataFrame) -> None:
     contradiction_rate = (
         ((prior["ipp"] > 7) & (prior["ian"] <= 5)) | ((prior["ipp"] <= 7) & (prior["ian"] > 5))
     ).mean() * 100
-    st.caption(f"Taxa de contradição entre IPP e IAN: {contradiction_rate:.1f}%")
+    show_caption(f"Taxa de contradição entre IPP e IAN: {contradiction_rate:.1f}%")
 
     fig_ipp_ian = px.imshow(
         ipp_ian_matrix,
@@ -625,11 +908,22 @@ def render_q5_q6(df_long: pd.DataFrame) -> None:
             "color": "Percentual de alunos (%)",
         },
     )
-    st.plotly_chart(fig_ipp_ian, use_container_width=True)
+    graph_refs["q6_matriz_ipp_ian"] = plotly_chart_numbered(
+        fig_ipp_ian,
+        "A leitura conjunta de IPP e IAN indica alinhamentos e contradições entre sinal psicopedagógico e risco de defasagem.",
+        analysis=(
+            "Há alinhamento relevante entre os perfis, mas também uma fração não desprezível de contradições."
+        ),
+        practical_meaning=(
+            "Isso indica que triagem de risco deve usar régua combinada (acadêmica + psicopedagógica), "
+            "evitando decisões baseadas em um único indicador."
+        ),
+    )
+    return graph_refs
 
 
 def render_q7(df: pd.DataFrame) -> dict | None:
-    st.subheader("Q7 - Drivers do IPV")
+    show_subheader("Q7 - Drivers do IPV")
 
     ipv_features = ["ida", "ieg", "iaa", "ips", "ipp", "ian"]
     ipv_data = df.dropna(subset=ipv_features + ["ipv"]).copy()
@@ -672,10 +966,20 @@ def render_q7(df: pd.DataFrame) -> dict | None:
     )
     fig_ipv_imp.update_layout(yaxis={"categoryorder": "total ascending"}, showlegend=False)
     fig_ipv_imp.update_traces(textposition="outside")
-    st.plotly_chart(fig_ipv_imp, use_container_width=True)
-    st.caption("Quanto maior a barra, maior a influência do indicador na explicação do ponto de virada.")
+    graph_ref = plotly_chart_numbered(
+        fig_ipv_imp,
+        "Quanto maior a barra, maior a influência do indicador na explicação do ponto de virada.",
+        analysis=(
+            "As importâncias mostram concentração da explicação do IPV em poucos indicadores-chave."
+        ),
+        practical_meaning=(
+            "Na prática, focar nos principais drivers tende a gerar maior retorno por recurso investido "
+            "do que distribuir esforço de forma homogênea."
+        ),
+    )
     top = ipv_importance.iloc[0]
     return {
+        "grafico_ref": graph_ref,
         "top_driver": str(top["indicador"]),
         "top_importance": float(top["importancia"]),
         "top3_share": float(ipv_importance.head(3)["importancia"].sum() * 100),
@@ -683,14 +987,14 @@ def render_q7(df: pd.DataFrame) -> dict | None:
     }
 
 
-def render_q8(df: pd.DataFrame) -> pd.DataFrame:
-    st.subheader("Q8 - Multidimensionalidade do INDE")
+def render_q8(df: pd.DataFrame) -> tuple[pd.DataFrame, int | None]:
+    show_subheader("Q8 - Multidimensionalidade do INDE")
 
     multi_features = ["ida", "ieg", "ips", "ipp"]
     multi_df = df.dropna(subset=multi_features + ["inde_ano"]).copy()
     if len(multi_df) < 150:
         st.info("Amostra insuficiente para análise robusta da multidimensionalidade.")
-        return pd.DataFrame()
+        return pd.DataFrame(), None
 
     X_train, X_test, y_train, y_test = train_test_split(
         multi_df[multi_features],
@@ -738,8 +1042,17 @@ def render_q8(df: pd.DataFrame) -> pd.DataFrame:
     )
     fig_import_inde.update_layout(yaxis={"categoryorder": "total ascending"}, showlegend=False)
     fig_import_inde.update_traces(textposition="outside")
-    st.plotly_chart(fig_import_inde, use_container_width=True)
-    st.caption("IDA e IEG tendem a formar o núcleo explicativo do INDE, com IPS/IPP agregando refinamento.")
+    graph_ref = plotly_chart_numbered(
+        fig_import_inde,
+        "IDA e IEG tendem a formar o núcleo explicativo do INDE, com IPS/IPP agregando refinamento.",
+        analysis=(
+            "O modelo indica predominância de desempenho acadêmico e engajamento na explicação do INDE."
+        ),
+        practical_meaning=(
+            "Isso sugere uma estratégia em camadas: eixo central acadêmico-engajamento e apoio psicossocial "
+            "direcionado para perfis de maior vulnerabilidade."
+        ),
+    )
 
     profile_df = multi_df.copy()
     for col in multi_features:
@@ -751,12 +1064,12 @@ def render_q8(df: pd.DataFrame) -> pd.DataFrame:
         .sort_values(["media_inde", "alunos"], ascending=[False, False])
     )
     profile_summary = profile_summary[profile_summary["alunos"] >= 15]
-    st.caption("Top combinações de perfil foram calculadas conforme o notebook de EDA.")
-    return profile_summary
+    show_caption("Top combinações de perfil foram calculadas conforme o notebook de EDA.")
+    return profile_summary, graph_ref
 
 
 def render_q9(df_long: pd.DataFrame) -> dict | None:
-    st.subheader("Q9 - Baseline de previsão de risco")
+    show_subheader("Q9 - Baseline de previsão de risco")
 
     risk_features = ["ian", "ida", "ieg", "iaa", "ips", "ipp", "ipv", "inde_ano", "defasagem"]
     risk_base = df_long[df_long["ano_base"].isin([2022, 2023])].copy()
@@ -793,7 +1106,7 @@ def render_q9(df_long: pd.DataFrame) -> dict | None:
     c2.metric("PR-AUC (teste)", f"{pr_auc:.3f}")
 
     risk_importance = pd.DataFrame({"feature": risk_features, "importance": rf_risk.feature_importances_}).sort_values("importance", ascending=False)
-    st.caption("Importâncias de variáveis e calibração foram calculadas conforme o notebook de EDA.")
+    show_caption("Importâncias de variáveis e calibração foram calculadas conforme o notebook de EDA.")
 
     test_scored = X_test.copy()
     test_scored["prob_risco"] = prob_test
@@ -814,8 +1127,9 @@ def render_q9(df_long: pd.DataFrame) -> dict | None:
     }
 
 
-def render_q10(df: pd.DataFrame) -> pd.DataFrame:
-    st.subheader("Q10 - Efetividade por fases e coortes")
+def render_q10(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
+    show_subheader("Q10 - Efetividade por fases e coortes")
+    graph_refs: dict[str, int] = {}
 
     program = df.dropna(subset=["ra", "ano_referencia", "pedra_ano"]).copy()
     program = program[program["pedra_ano"].isin(["Quartzo", "Agata", "Ametista", "Topazio"])]
@@ -863,7 +1177,16 @@ def render_q10(df: pd.DataFrame) -> pd.DataFrame:
     fig_phase_inde.update_traces(texttemplate="%{text:.2f}", textposition="outside")
     fig_phase_inde.update_xaxes(type="category")
     fig_phase_inde.update_yaxes(range=[0, phase_plot["media_inde"].max() + 1.0])
-    st.plotly_chart(fig_phase_inde, use_container_width=True)
+    graph_refs["q10_fase_inde"] = plotly_chart_numbered(
+        fig_phase_inde,
+        "A comparação por fase mostra diferenças de nível de INDE ao longo do tempo.",
+        analysis=(
+            "As fases não evoluem no mesmo ritmo: algumas consolidam patamar mais alto de INDE, enquanto outras avançam menos."
+        ),
+        practical_meaning=(
+            "Na prática, a gestão deve replicar práticas das fases com melhor evolução e reforçar suporte nas fases com estagnação."
+        ),
+    )
 
     fig_phase_risk = px.bar(
         phase_plot,
@@ -884,8 +1207,16 @@ def render_q10(df: pd.DataFrame) -> pd.DataFrame:
     fig_phase_risk.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
     fig_phase_risk.update_xaxes(type="category")
     fig_phase_risk.update_yaxes(range=[0, phase_plot["percentual_ian_defasado"].max() + 8])
-    st.plotly_chart(fig_phase_risk, use_container_width=True)
-    st.caption("Comparar nível de INDE com risco de defasagem ajuda a identificar fases com melhor equilíbrio.")
+    graph_refs["q10_fase_risco"] = plotly_chart_numbered(
+        fig_phase_risk,
+        "Comparar nível de INDE com risco de defasagem ajuda a identificar fases com melhor equilíbrio.",
+        analysis=(
+            "O risco de defasagem (IAN <= 5) varia por fase e não cai de forma uniforme no tempo."
+        ),
+        practical_meaning=(
+            "Isso orienta alocação proporcional de tutoria e apoio socioemocional, priorizando fases com maior concentração de risco."
+        ),
+    )
 
     cohort = program.dropna(subset=["inde_ano"]).copy()
     first_record = (
@@ -946,55 +1277,21 @@ def render_q10(df: pd.DataFrame) -> pd.DataFrame:
     fig_cohort.update_traces(texttemplate="%{text:.2f}", textposition="outside")
     fig_cohort.update_xaxes(type="category")
     fig_cohort.update_yaxes(range=[0, cohort_plot["media_inde"].max() + 1.0])
-    st.plotly_chart(fig_cohort, use_container_width=True)
-    st.caption("A leitura por coorte evidencia heterogeneidade de trajetória e orienta ações específicas.")
-    return cohort_evolution
-
-
-def render_q11(df: pd.DataFrame, cohort_evolution: pd.DataFrame) -> None:
-    st.subheader("Q11 - Síntese executiva")
-    ian_risk = (
-        df.dropna(subset=["ian"]).groupby("ano_referencia")["ian"].apply(lambda s: (s <= 5).mean() * 100).sort_index()
+    graph_refs["q10_coorte_inde"] = plotly_chart_numbered(
+        fig_cohort,
+        "A leitura por coorte evidencia heterogeneidade de trajetória e orienta ações específicas.",
+        analysis=(
+            "As coortes de entrada apresentam trajetórias diferentes de INDE, com ganhos distintos ao longo dos anos."
+        ),
+        practical_meaning=(
+            "Na prática, metas por coorte melhoram a gestão, pois evitam que a média geral esconda grupos com baixa evolução."
+        ),
     )
-    ida_means = df.dropna(subset=["ida"]).groupby("ano_referencia")["ida"].mean().sort_index()
-    delta_ida = ida_means.iloc[-1] - ida_means.iloc[0] if len(ida_means) >= 2 else np.nan
-    global_corr = df[["ieg", "ida", "ipp", "ian", "ips", "ipv", "inde_ano"]].corr(method="spearman")
-    corr_ieg_ida = global_corr.loc["ieg", "ida"]
-    corr_ipp_ian = global_corr.loc["ipp", "ian"]
-
-    if cohort_evolution.empty:
-        cohort_delta_txt = "Sem dados suficientes para coorte."
-    else:
-        cohort_delta = (
-            cohort_evolution.groupby("pedra_inicial")
-            .apply(lambda x: x.sort_values("ano_referencia")["media_inde"].iloc[-1] - x.sort_values("ano_referencia")["media_inde"].iloc[0])
-            .dropna()
-        )
-        cohort_delta_txt = cohort_delta.round(2).to_string()
-
-    st.markdown(
-        f"""
-        **Resumo para decisão da ONG**
-        - Risco de defasagem (IAN <= 5): 2022 = **{ian_risk.get(2022, np.nan):.1f}%**, 2023 = **{ian_risk.get(2023, np.nan):.1f}%**, 2024 = **{ian_risk.get(2024, np.nan):.1f}%**.
-        - Tendência de IDA (2022 -> 2024): **{delta_ida:.2f}** pontos.
-        - Relação IEG x IDA: **{corr_ieg_ida:.2f}**.
-        - Relação IPP x IAN: **{corr_ipp_ian:.2f}**.
-
-        **Implicações práticas**
-        1. Manter estratégia de redução de defasagem para perfis críticos (IAN <= 5).
-        2. Focar sustentação de desempenho acadêmico, evitando perda após ganhos iniciais.
-        3. Usar engajamento e indicadores psicopedagógicos como gatilhos de intervenção precoce.
-        4. Acompanhar fases e coortes com planos específicos, não apenas com ação média.
-
-        ```
-        {cohort_delta_txt}
-        ```
-        """
-    )
+    return cohort_evolution, graph_refs
 
 
 def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> None:
-
+    reset_graph_counter()
     years = sorted([int(y) for y in df["ano_referencia"].dropna().unique().tolist()])
     # c1, c2, c3 = st.columns(3)
     # c1.metric("Registros analisados", f"{len(df):,}".replace(",", "."))
@@ -1026,7 +1323,7 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             importance="Define o eixo de priorização das análises seguintes.",
             approach="Correlação de Spearman entre indicadores acadêmicos, comportamentais e de risco.",
         )
-        render_corr(df)
+        corr_ref = render_corr(df)
         inde_cols = ["inde_ano", "ida", "ieg", "ips", "ipp", "ian", "ipv"]
         inde_cols = [c for c in inde_cols if c in df.columns]
         if len(inde_cols) >= 3:
@@ -1037,7 +1334,11 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             top2_txt = f"{top2.upper()} ({inde_corr.iloc[1]:.2f})" if top2 is not None else "N/A"
             render_exec_note(
                 message=f"Maior associação com INDE: {top1.upper()} ({inde_corr.iloc[0]:.2f}). Segundo fator: {top2_txt}.",
-                implication="Priorizar frentes acadêmicas e de engajamento tende a mover o indicador global com maior eficiência.",
+                implication=(
+                    "Priorizar frentes acadêmicas e de engajamento tende a mover o indicador global com maior eficiência. "
+                    "Na prática, isso significa direcionar recursos para ações com maior efeito transversal antes de expandir iniciativas periféricas."
+                ),
+                graph_refs=[corr_ref],
             )
 
     with st.expander("Q1 - IAN: perfil de defasagem e evolução temporal", expanded=True):
@@ -1046,26 +1347,92 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             importance="IAN é o termômetro principal de risco pedagógico.",
             approach="Série temporal de média, composição por faixa de risco e recortes por sexo/faixa etária.",
         )
-        render_q1(df)
+        q1_refs = render_q1(df)
         ian_summary = (
             df.dropna(subset=["ian"])
             .groupby("ano_referencia", as_index=False)
             .agg(
                 ian_medio=("ian", "mean"),
                 percentual_defasagem_alta=("ian", lambda s: (s <= 5).mean() * 100),
+                percentual_adequado=("ian", lambda s: (s > 7).mean() * 100),
             )
             .sort_values("ano_referencia")
         )
         if len(ian_summary) >= 2:
             ian_start = ian_summary.iloc[0]
             ian_end = ian_summary.iloc[-1]
+            traj_defasagem_alta = " -> ".join(ian_summary["percentual_defasagem_alta"].map(lambda v: f"{v:.1f}%"))
+            traj_adequado = " -> ".join(ian_summary["percentual_adequado"].map(lambda v: f"{v:.1f}%"))
+            delta_defasagem_alta = ian_end["percentual_defasagem_alta"] - ian_start["percentual_defasagem_alta"]
+            delta_adequado = ian_end["percentual_adequado"] - ian_start["percentual_adequado"]
+
+            ian_by_gender = (
+                df.dropna(subset=["ian", "genero", "ano_referencia"])
+                .groupby(["ano_referencia", "genero"], as_index=False)
+                .agg(
+                    percentual_defasagem_alta=("ian", lambda s: (s <= 5).mean() * 100),
+                    percentual_adequado=("ian", lambda s: (s > 7).mean() * 100),
+                )
+                .sort_values(["ano_referencia", "genero"])
+            )
+
+            end_year = int(ian_end["ano_referencia"])
+            gender_msg = "Não houve amostra suficiente para comparar sexo no ano final."
+            gender_traj_msg = ""
+            if not ian_by_gender.empty:
+                end_gender = ian_by_gender[ian_by_gender["ano_referencia"] == end_year].copy()
+                if len(end_gender) >= 2:
+                    end_gender_high = end_gender.sort_values("percentual_defasagem_alta", ascending=False)
+                    g_high_1 = end_gender_high.iloc[0]
+                    g_high_2 = end_gender_high.iloc[1]
+                    gap_high = g_high_1["percentual_defasagem_alta"] - g_high_2["percentual_defasagem_alta"]
+
+                    end_gender_adequado = end_gender.sort_values("percentual_adequado", ascending=False)
+                    g_ok_1 = end_gender_adequado.iloc[0]
+                    g_ok_2 = end_gender_adequado.iloc[1]
+                    gap_ok = g_ok_1["percentual_adequado"] - g_ok_2["percentual_adequado"]
+
+                    gender_msg = (
+                        f"No recorte por sexo em {end_year}, {g_high_1['genero']} concentrou maior defasagem alta "
+                        f"({g_high_1['percentual_defasagem_alta']:.1f}% vs {g_high_2['percentual_defasagem_alta']:.1f}%; "
+                        f"diferença de {gap_high:.1f} p.p.). "
+                        f"No perfil adequado, {g_ok_1['genero']} liderou "
+                        f"({g_ok_1['percentual_adequado']:.1f}% vs {g_ok_2['percentual_adequado']:.1f}%; "
+                        f"diferença de {gap_ok:.1f} p.p.)."
+                    )
+
+                rows = []
+                for genero, part in ian_by_gender.groupby("genero"):
+                    part = part.sort_values("ano_referencia")
+                    if len(part) < 2:
+                        continue
+                    alta_ini = part["percentual_defasagem_alta"].iloc[0]
+                    alta_fim = part["percentual_defasagem_alta"].iloc[-1]
+                    ok_ini = part["percentual_adequado"].iloc[0]
+                    ok_fim = part["percentual_adequado"].iloc[-1]
+                    rows.append(
+                        f"{genero}: defasagem alta {alta_ini:.1f}% -> {alta_fim:.1f}% ({alta_fim - alta_ini:+.1f} p.p.); "
+                        f"adequado {ok_ini:.1f}% -> {ok_fim:.1f}% ({ok_fim - ok_ini:+.1f} p.p.)"
+                    )
+                if rows:
+                    gender_traj_msg = "<br>Trajetória por sexo no período: " + " | ".join(rows) + "."
+
             render_exec_note(
                 message=(
-                    f"IAN médio evoluiu de {ian_start['ian_medio']:.2f} para {ian_end['ian_medio']:.2f}. "
-                    f"Defasagem alta (IAN <= 5) variou de {ian_start['percentual_defasagem_alta']:.1f}% "
-                    f"para {ian_end['percentual_defasagem_alta']:.1f}%."
+                    f"IAN médio evoluiu de {ian_start['ian_medio']:.2f} para {ian_end['ian_medio']:.2f}.<br>"
+                    f"Trajetória da defasagem alta (IAN <= 5): {traj_defasagem_alta} "
+                    f"({delta_defasagem_alta:+.1f} p.p. no período).<br>"
+                    f"Trajetória do perfil adequado (IAN > 7): {traj_adequado} "
+                    f"({delta_adequado:+.1f} p.p. no período).<br>"
+                    f"{gender_msg}{gender_traj_msg}"
                 ),
-                implication="Há melhora estrutural, mas com grupos persistentes de risco que pedem ação segmentada.",
+                implication=(
+                    "Os gráficos indicam migração consistente de alunos do perfil de maior risco para o perfil adequado, "
+                    "mas com diferenças entre sexos. A ação recomendada é manter a estratégia de melhoria geral e "
+                    "incluir metas segmentadas por sexo/faixa etária para reduzir os bolsões de defasagem. "
+                    "Sem segmentação, a média melhora, mas os grupos com maior atraso tendem a permanecer para trás."
+                ),
+                graph_refs=list(q1_refs.values()),
             )
 
     with st.expander("Q2 - IDA: melhora, estagnação ou queda", expanded=True):
@@ -1074,7 +1441,7 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             importance="IDA resume aprendizagem e ajuda a medir retorno das intervenções.",
             approach="Comparação anual de média e distribuição para capturar tendência e volatilidade.",
         )
-        render_q2(df)
+        q2_refs = render_q2(df)
         ida_summary = (
             df.dropna(subset=["ida"])
             .groupby("ano_referencia", as_index=False)["ida"]
@@ -1087,7 +1454,11 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             trend = "melhora líquida" if delta > 0 else "queda líquida"
             render_exec_note(
                 message=f"Variação acumulada no período: {delta:+.2f} pontos de IDA, com {trend}.",
-                implication="A governança pedagógica precisa monitorar turmas/fases com oscilação para evitar regressão.",
+                implication=(
+                    "A governança pedagógica precisa monitorar turmas/fases com oscilação para evitar regressão. "
+                    "Em termos operacionais, isso pede rotina de acompanhamento mensal e plano de correção rápida para turmas em queda."
+                ),
+                graph_refs=list(q2_refs.values()),
             )
 
     with st.expander("Q3 - IEG x IDA e IPV", expanded=True):
@@ -1096,7 +1467,7 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             importance="Se a relação for forte, IEG pode atuar como sinal de intervenção precoce.",
             approach="Correlações anuais + dispersões com linha de tendência por ano.",
         )
-        render_q3(df)
+        q3_refs = render_q3(df)
         rows = []
         for year, part in df.groupby("ano_referencia"):
             sub = part[["ieg", "ida", "ipv"]].dropna()
@@ -1116,7 +1487,11 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
                     f"Correlação média IEG x IDA: {corr_df['ieg_ida'].mean():.2f}. "
                     f"Correlação média IEG x IPV: {corr_df['ieg_ipv'].mean():.2f}."
                 ),
-                implication="IEG pode ser usado como indicador de monitoramento contínuo para acionar suporte acadêmico.",
+                implication=(
+                    "IEG pode ser usado como indicador de monitoramento contínuo para acionar suporte acadêmico. "
+                    "Quando o engajamento cai, a intervenção precoce tende a reduzir a probabilidade de queda posterior no desempenho."
+                ),
+                graph_refs=list(q3_refs.values()) if q3_refs else None,
             )
 
     with st.expander("Q4 - IAA: coerência com indicadores objetivos", expanded=True):
@@ -1125,7 +1500,7 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             importance="Desalinhamento pode gerar percepção incorreta de necessidade de apoio.",
             approach="Distribuição do desvio entre IAA e média de IDA/IEG com medida de super/subestimação.",
         )
-        render_q4(df)
+        q4_ref = render_q4(df)
         coherence = df.dropna(subset=["iaa", "ida", "ieg"]).copy()
         if not coherence.empty:
             coherence["desvio"] = coherence["iaa"] - coherence[["ida", "ieg"]].mean(axis=1)
@@ -1133,7 +1508,11 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             under = (coherence["desvio"] < -0.5).mean() * 100
             render_exec_note(
                 message=f"Superestimação relevante: {over:.1f}%. Subestimação relevante: {under:.1f}%.",
-                implication="IAA agrega contexto socioemocional, mas decisão operacional deve combinar sinais objetivos.",
+                implication=(
+                    "IAA agrega contexto socioemocional, mas decisão operacional deve combinar sinais objetivos. "
+                    "Na prática, casos de desalinhamento pedem conversa pedagógica individual e checagem de evidências de aprendizagem."
+                ),
+                graph_refs=[q4_ref],
             )
 
     st.markdown("### Bloco 2 - Sinais antecedentes de risco")
@@ -1143,7 +1522,7 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             importance="Identificar risco cedo reduz custo e aumenta efetividade da intervenção.",
             approach="Análise longitudinal com eventos de queda no ano seguinte e matriz de coerência IPP x IAN.",
         )
-        render_q5_q6(df_long)
+        q5_q6_refs = render_q5_q6(df_long)
         prior = df_long[df_long["ano_base"].isin([2022, 2023])].copy()
         prior = prior.dropna(subset=["ida", "ida_prox", "ieg", "ieg_prox", "ips", "ipp", "ian", "ian_prox"])
         if not prior.empty:
@@ -1162,7 +1541,11 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
                     f"No perfil IPS baixo + IPP baixo: {high_rate:.1f}%. "
                     f"Contradição entre IPP e IAN: {contradiction_rate:.1f}%."
                 ),
-                implication="IPS/IPP são bons sinais antecedentes, mas devem ser lidos junto ao histórico acadêmico.",
+                implication=(
+                    "IPS/IPP são bons sinais antecedentes, mas devem ser lidos junto ao histórico acadêmico. "
+                    "Isso permite priorizar preventivamente alunos com maior probabilidade de deterioração no ano seguinte."
+                ),
+                graph_refs=list(q5_q6_refs.values()) if q5_q6_refs else None,
             )
 
     st.markdown("### Bloco 3 - Drivers e modelagem exploratória")
@@ -1180,7 +1563,11 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
                     f"Top 3 drivers concentram {q7_info['top3_share']:.1f}% da explicação "
                     f"(amostra: {q7_info['n']} registros)."
                 ),
-                implication="Intervenções focadas nos drivers principais tendem a gerar maior ganho marginal no IPV.",
+                implication=(
+                    "Intervenções focadas nos drivers principais tendem a gerar maior ganho marginal no IPV. "
+                    "Em cenário de orçamento limitado, essa priorização aumenta eficiência e velocidade de impacto."
+                ),
+                graph_refs=[q7_info["grafico_ref"]],
             )
 
     with st.expander("Q8 - Combinações que explicam melhor o INDE", expanded=True):
@@ -1189,7 +1576,7 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             importance="Permite desenhar perfis-alvo para políticas de acompanhamento.",
             approach="Modelo de regressão com variáveis-chave e análise de perfis por faixas (baixo/intermediário/alto).",
         )
-        q8_profiles = render_q8(df)
+        q8_profiles, q8_ref = render_q8(df)
         if isinstance(q8_profiles, pd.DataFrame) and not q8_profiles.empty:
             top_profile = q8_profiles.iloc[0]
             render_exec_note(
@@ -1198,7 +1585,11 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
                     f"IPS={top_profile['ips_faixa']}, IPP={top_profile['ipp_faixa']}; "
                     f"INDE médio={top_profile['media_inde']:.2f} (n={int(top_profile['alunos'])})."
                 ),
-                implication="INDE é multidimensional, com eixo dominante acadêmico + engajamento na maior parte dos perfis.",
+                implication=(
+                    "INDE é multidimensional, com eixo dominante acadêmico + engajamento na maior parte dos perfis. "
+                    "Na prática, isso reforça que políticas exclusivamente acadêmicas perdem efetividade sem estratégia de engajamento."
+                ),
+                graph_refs=[q8_ref] if q8_ref is not None else None,
             )
 
     with st.expander("Q9 - Baseline de previsão de risco de defasagem", expanded=True):
@@ -1216,7 +1607,10 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
                     f"({q9_info['top_feature_importance']*100:.1f}%). "
                     f"Base modelada: {q9_info['n']} observações."
                 ),
-                implication="Há sinal preditivo útil para triagem inicial de risco, com espaço para calibração refinada.",
+                implication=(
+                    "Há sinal preditivo útil para triagem inicial de risco, com espaço para calibração refinada. "
+                    "Isso viabiliza uma fila de prioridade para atendimento, reduzindo reação tardia aos casos críticos."
+                ),
             )
 
     with st.expander("Q10 - Efetividade por fase e coorte", expanded=True):
@@ -1225,7 +1619,7 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             importance="Suporta alocação de recursos e réplica de práticas bem-sucedidas.",
             approach="Comparação anual por fase e coorte, com foco em INDE e risco de defasagem.",
         )
-        cohort_evolution = render_q10(df)
+        cohort_evolution, q10_refs = render_q10(df)
         if isinstance(cohort_evolution, pd.DataFrame) and not cohort_evolution.empty:
             end_year = cohort_evolution["ano_referencia"].max()
             start_year = cohort_evolution["ano_referencia"].min()
@@ -1247,16 +1641,12 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
                     f"Maior ganho entre {int(start_year)} e {int(end_year)}: "
                     f"{strongest_growth} ({strongest_growth_value:+.2f})."
                 ),
-                implication="O impacto do programa é heterogêneo; a gestão deve combinar estratégia comum com ação por fase/coorte.",
+                implication=(
+                    "O impacto do programa é heterogêneo; a gestão deve combinar estratégia comum com ação por fase/coorte. "
+                    "Em termos práticos, isso significa definir plano base único e complementos específicos por maturidade da fase."
+                ),
+                graph_refs=list(q10_refs.values()),
             )
         else:
             cohort_evolution = pd.DataFrame()
-
-    with st.expander("Q11 - Síntese executiva e plano de ação", expanded=True):
-        render_analysis_header(
-            question="Qual a síntese final para decisão executiva?",
-            importance="Consolida os principais achados para orientar plano de ação.",
-            approach="Resumo integrado dos indicadores de risco, desempenho e evolução por coorte.",
-        )
-        render_q11(df, cohort_evolution)
 
