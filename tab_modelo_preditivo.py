@@ -116,6 +116,33 @@ DOCUMENTED_LIMITS = {
 }
 MAX_ESCALA_INDICADOR = 10.0
 MAX_QTD_AVALIACOES = 50
+DIMENSION_INDICATORS = {
+    "acadêmica": {
+        "label": "dimensão acadêmica",
+        "indicators": [
+            ("ian", "Índice de Adequação de Nível"),
+            ("ida", "Indicador de Desempenho Acadêmico"),
+            ("ieg", "Indicador de Engajamento"),
+        ],
+        "guidance": "priorizar reforço de aprendizagem, acompanhamento da adequação de nível e regularidade nas rotinas acadêmicas.",
+    },
+    "psicossocial": {
+        "label": "dimensão psicossocial",
+        "indicators": [
+            ("iaa", "Indicador de Autoavaliação"),
+            ("ips", "Indicador Psicossocial"),
+        ],
+        "guidance": "reforçar o acompanhamento emocional, a percepção de si e o suporte relacional no dia a dia do(a) estudante.",
+    },
+    "psicopedagógica": {
+        "label": "dimensão psicopedagógica",
+        "indicators": [
+            ("ipp", "Indicador Psicopedagógico"),
+            ("ipv", "Indicador de Ponto de Virada"),
+        ],
+        "guidance": "intensificar o acompanhamento psicopedagógico e investigar barreiras de aprendizagem que possam estar travando a evolução.",
+    },
+}
 
 
 def _safe_one_hot_encoder() -> OneHotEncoder:
@@ -414,13 +441,121 @@ def _risk_level(probability: float) -> str:
     return "Alta"
 
 
-def _render_result_card(probability: float, level: str) -> None:
+def _risk_message(level: str) -> str:
+    if level == "Alta":
+        return "Acima de 50%: é extremamente necessário que o(a) estudante tenha acompanhamento psicopedagógico."
+    if level == "Média":
+        return "Entre 30% e 50%: o(a) estudante necessita de acompanhamento mais intensivo para evitar a defasagem."
+    return "Até 30%: o(a) estudante deve manter o padrão atual."
+
+
+def _valid_score(value: object) -> float | None:
+    try:
+        score = float(value)
+    except Exception:
+        return None
+    if np.isnan(score):
+        return None
+    return score
+
+
+def _format_readable_list(items: list[str]) -> str:
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} e {items[1]}"
+    return f"{', '.join(items[:-1])} e {items[-1]}"
+
+
+def _dimension_priority_message(indicator_values: dict[str, float | str]) -> str:
+    assessments = []
+    for dimension_key, config in DIMENSION_INDICATORS.items():
+        scores: list[float] = []
+        weak_names: list[str] = []
+        attention_names: list[str] = []
+        for indicator_key, indicator_name in config["indicators"]:
+            score = _valid_score(indicator_values.get(indicator_key))
+            if score is None:
+                continue
+            scores.append(score)
+            # Regra operacional para leitura gerencial: abaixo de 6 = fragilidade; entre 6 e 7 = atenção.
+            if score < 6.0:
+                weak_names.append(indicator_name)
+            elif score < 7.0:
+                attention_names.append(indicator_name)
+
+        if not scores:
+            continue
+
+        size = len(scores)
+        mean_score = float(np.mean(scores))
+        severity = (
+            (len(weak_names) / size) * 2.0
+            + ((len(weak_names) + len(attention_names)) / size)
+            + max(0.0, 7.0 - mean_score) / 4.0
+        )
+        assessments.append(
+            {
+                "dimension_key": dimension_key,
+                "label": config["label"],
+                "guidance": config["guidance"],
+                "mean_score": mean_score,
+                "severity": severity,
+                "weak_names": weak_names,
+                "attention_names": attention_names,
+            }
+        )
+
+    if not assessments:
+        return "Não foi possível identificar uma dimensão prioritária com os dados informados."
+
+    assessments = sorted(assessments, key=lambda item: (-item["severity"], item["mean_score"]))
+    top = assessments[0]
+    second = assessments[1] if len(assessments) > 1 else None
+
+    if top["severity"] < 0.55 and top["mean_score"] >= 7.0:
+        return (
+            "Os indicadores informados não apontam uma fragilidade dominante em uma dimensão específica. "
+            "O foco deve ser manter a consistência atual e acompanhar eventuais oscilações."
+        )
+
+    focus_names = top["weak_names"] or top["attention_names"]
+    focus_text = _format_readable_list(focus_names)
+
+    if second and abs(top["severity"] - second["severity"]) < 0.20 and second["severity"] >= 0.80:
+        second_focus_names = second["weak_names"] or second["attention_names"]
+        second_focus_text = _format_readable_list(second_focus_names)
+        combined_focus = []
+        if focus_text:
+            combined_focus.append(focus_text)
+        if second_focus_text:
+            combined_focus.append(second_focus_text)
+        combined_focus_text = _format_readable_list(combined_focus)
+        return (
+            f"Há maior necessidade de atenção nas {top['label']} e {second['label']}. "
+            f"Os sinais mais sensíveis aparecem em {combined_focus_text}. "
+            f"Vale {top['guidance']} Também é importante {second['guidance']}"
+        )
+
+    if focus_text:
+        return (
+            f"O principal ponto de atenção está na {top['label']}, especialmente em {focus_text}. "
+            f"Vale {top['guidance']}"
+        )
+
+    return f"O principal ponto de atenção está na {top['label']}. Vale {top['guidance']}"
+
+
+def _render_result_card(probability: float, level: str, dimension_message: str) -> None:
     color_map = {
         "Baixa": ("#2A9D8F", "#E8F6F3"),
         "Média": ("#E9C46A", "#FFF8E8"),
         "Alta": ("#E76F51", "#FDEDEC"),
     }
     border_color, bg_color = color_map.get(level, ("#457B9D", "#F4F8FB"))
+    risk_message = _risk_message(level)
     st.markdown(
         f"""
         <div style="background:{bg_color}; border:1px solid {border_color}; border-left:6px solid {border_color};
@@ -431,27 +566,16 @@ def _render_result_card(probability: float, level: str) -> None:
             <div style="margin-top:0.35rem; color:#264653;">
                 Faixa de risco: <strong>{level}</strong>
             </div>
+            <div style="margin-top:0.55rem; color:#264653; font-size:0.96rem;">
+                {risk_message}
+            </div>
+            <div style="margin-top:0.65rem; padding-top:0.65rem; border-top:1px solid rgba(38, 70, 83, 0.16);
+                        color:#264653; font-size:0.95rem; line-height:1.5;">
+                {dimension_message}
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
-    )
-
-
-def _render_human_interpretation(level: str) -> None:
-    if level == "Alta":
-        st.warning(
-            "Alta (acima de 50%): é extremamente necessário que o(a) estudante tenha acompanhamento psicopedagógico."
-        )
-        return
-
-    if level == "Média":
-        st.info(
-            "Média (de 30% a 50%): o(a) estudante necessita de acompanhamento mais intensivo para evitar a defasagem."
-        )
-        return
-
-    st.success(
-        "Baixa (de 0% a 30%): o(a) estudante deve manter o padrão atual."
     )
 
 
@@ -790,7 +914,7 @@ def render_modelo_preditivo_tab(df: pd.DataFrame) -> None:
         feature: bundle["default_inputs"].get(feature) for feature in bundle["feature_columns"]
     }
 
-    with st.form("form_predicao_risco"):
+    with st.container():
         st.markdown("### 1. Dados do Aluno")
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -813,6 +937,7 @@ def render_modelo_preditivo_tab(df: pd.DataFrame) -> None:
                 "Fase efetiva (programa atual)",
                 options=PHASE_LABELS,
                 index=PHASE_LABELS.index(default_phase_label),
+                key="pred_fase_efetiva",
                 help="A fase representa o nível de aprendizado do(a) estudante na Associação Passos Mágicos.",
             )
             values["fase_programa"] = PHASE_LABEL_TO_VALUE[selected_phase_label]
@@ -836,6 +961,7 @@ def render_modelo_preditivo_tab(df: pd.DataFrame) -> None:
                 "Fase ideal (esperada para idade/série)",
                 options=PHASE_LABELS,
                 index=PHASE_LABELS.index(PHASE_VALUE_TO_LABEL[fase_ideal_default]),
+                key="pred_fase_ideal",
                 help="Usada no cálculo de defasagem: D = fase efetiva - fase ideal.",
             )
             phase_ideal_num = _extract_phase_code(PHASE_LABEL_TO_VALUE[selected_ideal_label])
@@ -1153,17 +1279,17 @@ def render_modelo_preditivo_tab(df: pd.DataFrame) -> None:
             unsafe_allow_html=True,
         )
 
-        submitted = st.form_submit_button("Calcular probabilidade de risco", width="stretch", type="primary")
+        st.caption("Os cálculos acima atualizam imediatamente. Use o botão abaixo apenas para gerar a predição.")
+        submitted = st.button("Calcular probabilidade de risco", type="primary", use_container_width=True)
 
     if not submitted:
-        st.info("Preencha os campos e clique em **Calcular probabilidade de risco**.")
         return
 
     _sync_derived_features(bundle, values)
     input_row = pd.DataFrame([{feature: values.get(feature) for feature in bundle["feature_columns"]}])
     probability = float(bundle["pipeline"].predict_proba(input_row)[:, 1][0])
     level = _risk_level(probability)
+    dimension_message = _dimension_priority_message(values)
 
     _render_probability_gauge(probability)
-    _render_result_card(probability, level)
-    _render_human_interpretation(level)
+    _render_result_card(probability, level, dimension_message)
