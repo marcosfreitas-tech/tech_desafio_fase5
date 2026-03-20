@@ -914,7 +914,7 @@ def render_modelo_preditivo_tab(df: pd.DataFrame) -> None:
         feature: bundle["default_inputs"].get(feature) for feature in bundle["feature_columns"]
     }
 
-    with st.container():
+    with st.form("predicao_modelo_form", clear_on_submit=False):
         st.markdown("### 1. Dados do Aluno")
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -1133,6 +1133,15 @@ def render_modelo_preditivo_tab(df: pd.DataFrame) -> None:
                 )
                 st.caption("IPV calculado automaticamente por proxy operacional: média de IDA, IEG e IPS.")
 
+        submitted = st.form_submit_button(
+            "Calcular indicadores e probabilidade de risco de defasagem",
+            type="primary",
+            use_container_width=True,
+        )
+
+        if not submitted:
+            return
+
         preview_values = dict(values)
         _sync_derived_features(bundle, preview_values)
 
@@ -1278,12 +1287,6 @@ def render_modelo_preditivo_tab(df: pd.DataFrame) -> None:
             """,
             unsafe_allow_html=True,
         )
-
-        st.caption("Os cálculos acima atualizam imediatamente. Use o botão abaixo apenas para gerar a predição.")
-        submitted = st.button("Calcular probabilidade de risco", type="primary", use_container_width=True)
-
-    if not submitted:
-        return
 
     _sync_derived_features(bundle, values)
     input_row = pd.DataFrame([{feature: values.get(feature) for feature in bundle["feature_columns"]}])
