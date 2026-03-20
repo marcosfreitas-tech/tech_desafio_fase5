@@ -248,7 +248,7 @@ def plotly_chart_numbered(
     *,
     apply_full_names: bool = True,
     prefix_title: bool = True,
-    analysis_title: str = "Leitura do gráfico",
+    analysis_title: str = "Análise do gráfico",
     practical_title: str = "O que isso significa na prática",
     expand_note_text: bool = False,
 ) -> int:
@@ -428,7 +428,7 @@ def render_graph_note(
     analysis: str,
     practical_meaning: str,
     *,
-    analysis_title: str = "Leitura do gráfico",
+    analysis_title: str = "Análise do gráfico",
     practical_title: str = "O que isso significa na prática",
     expand_text: bool = False,
 ) -> None:
@@ -787,17 +787,30 @@ def render_q2(df: pd.DataFrame) -> dict[str, int]:
         x="ano_referencia",
         y="ida",
         color="ano_referencia",
-        box=False,
-        points=False,
-        title="Distribuicao do IDA por ano (sem linha de mediana)",
+        box=True,
+        points="outliers",
+        title="",
         labels={
             "ano_referencia": "Ano de referencia",
             "ida": "IDA - desempenho academico",
         },
-        color_discrete_sequence=["#1D3557", "#457B9D", "#2A9D8F"],
+        color_discrete_map={"2022": "#1F3E67", "2023": "#3F7BA4", "2024": "#1B9C8A"},
+        template="ggplot2",
     )
-    fig_ida_violin.update_layout(showlegend=False)
-    fig_ida_violin.update_xaxes(type="category")
+    fig_ida_violin.update_traces(
+        opacity=0.58,
+        line_width=2,
+        marker={"size": 5, "opacity": 0.7},
+        width=0.78,
+    )
+    fig_ida_violin.update_layout(
+        showlegend=False,
+        plot_bgcolor="#E5E5E5",
+        paper_bgcolor="#E5E5E5",
+        margin={"l": 6, "r": 8, "t": 8, "b": 10},
+    )
+    fig_ida_violin.update_xaxes(type="category", title_text="Ano de referencia", gridcolor="#C7D1DD")
+    fig_ida_violin.update_yaxes(title_text="", showticklabels=False, gridcolor="#C7D1DD")
     graph_refs["ida_distribuicao"] = plotly_chart_numbered(
         fig_ida_violin,
         "A distribuição mostra heterogeneidade entre estudantes, além da média global.",
@@ -848,20 +861,42 @@ def render_q3(df: pd.DataFrame) -> dict[str, int] | None:
         color="Par de indicadores",
         barmode="group",
         text="rotulo",
-        title="Q3 - Correlacoes IEG x IDA, IEG x IPV e IDA x IPV por ano",
+        title="",
         labels={
             "correlacao_spearman": "rho (Spearman)",
             "Ano de referencia": "Ano de referencia",
         },
         color_discrete_map={
             "IEG x IDA": "#7B3F98",
-            "IEG x IPV": "#1B9E77",
-            "IDA x IPV": "#386CB0",
+            "IEG x IPV": "#24A17A",
+            "IDA x IPV": "#3F6FAE",
         },
+        template="ggplot2",
     )
-    fig_corr_q3.update_traces(textposition="outside")
-    fig_corr_q3.update_xaxes(type="category")
-    fig_corr_q3.update_yaxes(range=[0, corr_long["correlacao_spearman"].max() + 0.12])
+    fig_corr_q3.update_traces(textposition="outside", textfont={"size": 18, "color": "#4E6C9E"}, cliponaxis=False)
+    fig_corr_q3.update_layout(
+        showlegend=False,
+        bargap=0.2,
+        plot_bgcolor="#E5E5E5",
+        paper_bgcolor="#E5E5E5",
+        margin={"l": 6, "r": 10, "t": 8, "b": 10},
+    )
+    fig_corr_q3.update_xaxes(type="category", title_text="Ano de referencia", gridcolor="#C7D1DD")
+    fig_corr_q3.update_yaxes(
+        range=[0, max(0.7, corr_long["correlacao_spearman"].max() + 0.06)],
+        title_text="",
+        showticklabels=False,
+        gridcolor="#C7D1DD",
+    )
+    fig_corr_q3.add_hline(
+        y=0.5,
+        line_dash="dot",
+        line_color="#FF6B57",
+        line_width=2,
+        annotation_text="Correlação moderada (0,5)",
+        annotation_position="top right",
+        annotation_font={"color": "#000000", "size": 16},
+    )
     graph_refs["q3_correlacoes"] = plotly_chart_numbered(
         fig_corr_q3,
         "As correlações positivas sustentam o uso do engajamento como sinal operacional de desempenho.",
@@ -896,8 +931,8 @@ def render_q3(df: pd.DataFrame) -> dict[str, int] | None:
         opacity=0.55,
         title="Relacao entre IEG (engajamento) e IDA (desempenho academico)",
         labels={
-            "ieg": "IEG - indicador de engajamento",
-            "ida": "IDA - indicador de desempenho academico",
+            "ieg": "IEG",
+            "ida": "IDA",
             "ano_referencia": "Ano de referencia",
         },
         color_discrete_map=year_color_map,
@@ -918,9 +953,15 @@ def render_q3(df: pd.DataFrame) -> dict[str, int] | None:
                 line={"dash": "dash", "width": 2, "color": year_color_map.get(year_value, "#333333")},
             )
         )
+    fig_scatter_ieg_ida.update_layout(
+        margin={"l": 130, "r": 18, "t": 56, "b": 64},
+    )
+    fig_scatter_ieg_ida.update_xaxes(automargin=True, title_standoff=12)
+    fig_scatter_ieg_ida.update_yaxes(automargin=True, title_standoff=12)
     graph_refs["q3_disp_ieg_ida"] = plotly_chart_numbered(
         fig_scatter_ieg_ida,
         "A inclinação positiva das linhas de tendência reforça a associação entre engajamento e resultado acadêmico.",
+        apply_full_names=False,
     )
 
     fig_scatter_ieg_ipv = px.scatter(
@@ -931,8 +972,8 @@ def render_q3(df: pd.DataFrame) -> dict[str, int] | None:
         opacity=0.55,
         title="Relacao entre IEG (engajamento) e IPV (ponto de virada)",
         labels={
-            "ieg": "IEG - indicador de engajamento",
-            "ipv": "IPV - indicador de ponto de virada",
+            "ieg": "IEG",
+            "ipv": "IPV",
             "ano_referencia": "Ano de referencia",
         },
         color_discrete_map=year_color_map,
@@ -953,9 +994,15 @@ def render_q3(df: pd.DataFrame) -> dict[str, int] | None:
                 line={"dash": "dash", "width": 2, "color": year_color_map.get(year_value, "#333333")},
             )
         )
+    fig_scatter_ieg_ipv.update_layout(
+        margin={"l": 130, "r": 18, "t": 56, "b": 64},
+    )
+    fig_scatter_ieg_ipv.update_xaxes(automargin=True, title_standoff=12)
+    fig_scatter_ieg_ipv.update_yaxes(automargin=True, title_standoff=12)
     graph_refs["q3_disp_ieg_ipv"] = plotly_chart_numbered(
         fig_scatter_ieg_ipv,
         "O padrão também aparece para IPV, indicando que engajamento antecede pontos de virada.",
+        apply_full_names=False,
     )
     return graph_refs
 
@@ -1142,7 +1189,7 @@ def render_q5_q6(df_long: pd.DataFrame) -> dict[str, int] | None:
             "psicossocial isolado não se converte em defasagem de nível. Evidência de que IPP funciona como amortecedor "
             "do risco psicossocial."
         ),
-        analysis_title="Leitura dos gráficos",
+        analysis_title="Análise dos gráficos",
     )
 
     prior["perfil_ipp_clinico"] = np.where(prior["ipp"] <= 7, "IPP fragil (<= 7)", "IPP adequado (> 7)")
@@ -1403,7 +1450,7 @@ def render_q9(df_long: pd.DataFrame) -> dict | None:
 
 
 def render_q10(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
-    show_subheader("Q10 - Efetividade por fases e coortes")
+    show_subheader("Q10 - Efetividade por fases e grupos de entrada")
     graph_refs: dict[str, int] = {}
 
     program = df.dropna(subset=["ra", "ano_referencia", "pedra_ano"]).copy()
@@ -1462,13 +1509,13 @@ def render_q10(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
             "Ágata (5,5-6,9) | 6,61 | 6,60 | -0,01 | 85,6% | 67,1% | -18,5 pp\n"
             "Ametista (6,9-8,2) | 7,53 | 7,54 | +0,01 | 65,5% | 54,5% | -11,0 pp\n"
             "Topázio (8,2-9,3) | 8,37 | 8,47 | +0,10 | 32,3% | 23,4% | -8,9 pp\n\n"
-            "Trajetória por coorte de entrada (Gráfico 19):\n"
-            "Coorte inicial | INDE 2022 | INDE 2024 | Ganho total | Interpretação\n"
+            "Trajetória por grupo de entrada (Gráfico 19):\n"
+            "Grupo de entrada | INDE 2022 | INDE 2024 | Ganho total | Interpretação\n"
             "Quartzo | 5,24 | 5,88 | +0,64 | Maior ganho - programa mais efetivo aqui\n"
             "Ágata | 6,61 | 6,64 | +0,03 | ESTAGNAÇÃO - gap estratégico prioritário\n"
             "Ametista | 7,53 | 7,50 | -0,03 | Quase estável - manutenção\n"
             "Topázio | 8,37 | 8,25 | -0,12 | Queda - programa tem dificuldade no topo\n\n"
-            "PARADOXO CENTRAL: o Topázio tem o maior INDE absoluto (8,47 em 2024), mas a coorte que entrou como Topázio "
+            "PARADOXO CENTRAL: o Topázio tem o maior INDE absoluto (8,47 em 2024), mas o grupo que entrou como Topázio "
             "perdeu -0,12 pontos. O programa eleva mais quem está mais baixo e mantém, com dificuldade, quem já está no "
             "topo. Isso é coerência com a missão, mas precisa ser explicitado para gestão de expectativas."
         ),
@@ -1479,7 +1526,7 @@ def render_q10(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
             "das médias. Adicionalmente: 23,4% dos alunos Topázio têm IAN <= 5. Como IAN vale 10% do INDE, é possível ter "
             "INDE 8,3+ com dois anos de defasagem de nível, invisível nos relatórios de média."
         ),
-        analysis_title="Leitura dos gráficos",
+        analysis_title="Análise dos gráficos",
     )
 
     fig_phase_risk = px.bar(
@@ -1506,70 +1553,73 @@ def render_q10(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
         "Comparar nível de INDE com risco de defasagem ajuda a identificar fases com melhor equilíbrio.",
     )
 
-    cohort = program.dropna(subset=["inde_ano"]).copy()
+    group_entry_base = program.dropna(subset=["inde_ano"]).copy()
     first_record = (
-        cohort.sort_values(["ra", "ano_referencia"]).groupby("ra", as_index=False).first()[["ra", "pedra_ano"]].rename(columns={"pedra_ano": "pedra_inicial"})
+        group_entry_base.sort_values(["ra", "ano_referencia"])
+        .groupby("ra", as_index=False)
+        .first()[["ra", "pedra_ano"]]
+        .rename(columns={"pedra_ano": "pedra_inicial"})
     )
-    cohort = cohort.merge(first_record, on="ra", how="left")
+    group_entry_base = group_entry_base.merge(first_record, on="ra", how="left")
 
-    cohort_evolution = (
-        cohort.groupby(["pedra_inicial", "ano_referencia"], as_index=False)
+    group_entry_evolution = (
+        group_entry_base.groupby(["pedra_inicial", "ano_referencia"], as_index=False)
         .agg(media_inde=("inde_ano", "mean"), alunos=("ra", "nunique"))
     )
 
     stone_order = ["Quartzo", "Agata", "Ametista", "Topazio"]
-    cohort_evolution["pedra_inicial"] = pd.Categorical(cohort_evolution["pedra_inicial"], categories=stone_order, ordered=True)
-    cohort_evolution = (
-        cohort_evolution
+    group_entry_evolution["pedra_inicial"] = pd.Categorical(group_entry_evolution["pedra_inicial"], categories=stone_order, ordered=True)
+    group_entry_evolution = (
+        group_entry_evolution
         .sort_values(["pedra_inicial", "ano_referencia"])
     )
 
-    cohort_plot = cohort_evolution.copy()
-    cohort_plot["ano_referencia"] = cohort_plot["ano_referencia"].astype(int).astype(str)
-    cohort_label_map = {
+    group_entry_plot = group_entry_evolution.copy()
+    group_entry_plot["ano_referencia"] = group_entry_plot["ano_referencia"].astype(int).astype(str)
+    group_label_map = {
         "Quartzo": "Quartzo",
         "Agata": "Agata",
         "Ametista": "Ametista",
         "Topazio": "Topazio",
     }
-    cohort_plot["coorte_inicial_rotulo"] = cohort_plot["pedra_inicial"].map(cohort_label_map)
-    cohort_order_label = ["Quartzo", "Agata", "Ametista", "Topazio"]
-    cohort_color_map = {
+    group_entry_plot["grupo_inicial_rotulo"] = group_entry_plot["pedra_inicial"].map(group_label_map)
+    group_order_label = ["Quartzo", "Agata", "Ametista", "Topazio"]
+    group_color_map = {
         "Quartzo": "#A4B3D3",
         "Agata": "#8092AC",
         "Ametista": "#08286F",
         "Topazio": "#00164D",
     }
-    cohort_plot["coorte_inicial_rotulo"] = pd.Categorical(
-        cohort_plot["coorte_inicial_rotulo"],
-        categories=cohort_order_label,
+    group_entry_plot["grupo_inicial_rotulo"] = pd.Categorical(
+        group_entry_plot["grupo_inicial_rotulo"],
+        categories=group_order_label,
         ordered=True,
     )
-    cohort_plot = cohort_plot.sort_values(["ano_referencia", "coorte_inicial_rotulo"])
-    fig_cohort = px.bar(
-        cohort_plot,
+    group_entry_plot = group_entry_plot.sort_values(["ano_referencia", "grupo_inicial_rotulo"])
+    fig_group_entry = px.bar(
+        group_entry_plot,
         x="ano_referencia",
         y="media_inde",
-        color="coorte_inicial_rotulo",
+        color="grupo_inicial_rotulo",
         barmode="group",
         text="media_inde",
-        title="Evolucao do INDE por coorte da pedra inicial",
+        title="Evolucao do INDE por grupo de entrada da pedra inicial",
         labels={
             "ano_referencia": "Ano de referencia",
             "media_inde": "INDE medio",
-            "coorte_inicial_rotulo": "Coorte inicial",
+            "grupo_inicial_rotulo": "Grupo de entrada",
         },
-        category_orders={"coorte_inicial_rotulo": cohort_order_label, "ano_referencia": ["2022", "2023", "2024"]},
-        color_discrete_map=cohort_color_map,
+        category_orders={"grupo_inicial_rotulo": group_order_label, "ano_referencia": ["2022", "2023", "2024"]},
+        color_discrete_map=group_color_map,
     )
-    fig_cohort.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-    fig_cohort.update_xaxes(type="category")
-    fig_cohort.update_yaxes(range=[0, cohort_plot["media_inde"].max() + 1.0])
-    graph_refs["q10_coorte_inde"] = plotly_chart_numbered(
-        fig_cohort,
-        "A leitura por coorte evidencia heterogeneidade de trajetória e orienta ações específicas.",
+    fig_group_entry.update_traces(texttemplate="%{text:.2f}", textposition="outside")
+    fig_group_entry.update_xaxes(type="category")
+    fig_group_entry.update_yaxes(range=[0, group_entry_plot["media_inde"].max() + 1.0])
+    graph_refs["q10_grupo_entrada_inde"] = plotly_chart_numbered(
+        fig_group_entry,
+        "A leitura por grupo de entrada evidencia heterogeneidade de trajetória e orienta ações específicas.",
     )
-    return cohort_evolution, graph_refs
+    return group_entry_evolution, graph_refs
 
 
 def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> None:
@@ -1883,32 +1933,32 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
                 base_visual_text="Sem base gráfica - métricas do modelo baseline (ROC-AUC e PR-AUC)",
             )
 
-    with st.expander("Q10 - Efetividade por fase e coorte", expanded=True):
+    with st.expander("Q10 - Efetividade por fase e grupos de entrada", expanded=True):
         render_analysis_header(
-            question="Quais fases/coortes mostram maior efetividade ao longo do tempo?",
+            question="Quais fases e grupos de entrada mostram maior efetividade ao longo do tempo?",
             importance="Suporta alocação de recursos e réplica de práticas bem-sucedidas.",
-            approach="Comparação anual por fase e coorte, com foco em INDE e risco de defasagem.",
+            approach="Comparação anual por fase e por grupo de entrada, com foco em INDE e risco de defasagem.",
         )
-        cohort_evolution, q10_refs = render_q10(df)
-        if isinstance(cohort_evolution, pd.DataFrame) and not cohort_evolution.empty and q10_refs:
+        group_entry_evolution, q10_refs = render_q10(df)
+        if isinstance(group_entry_evolution, pd.DataFrame) and not group_entry_evolution.empty and q10_refs:
             render_exec_note(
                 message=(
                     "Impacto real e verificável\n"
                     "Todas as faixas reduziram o percentual de alunos com defasagem alta, evidência de efetividade distribuída, "
                     "não concentrada numa faixa.\n\n"
                     "Programa de recuperação, não de excelência\n"
-                    "O maior ganho de INDE é da coorte Quartzo (+0,64). O Topázio perdeu (-0,12). O programa é mais efetivo "
+                    "O maior ganho de INDE é do grupo Quartzo (+0,64). O Topázio perdeu (-0,12). O programa é mais efetivo "
                     "em elevar os mais vulneráveis, coerência com a missão.\n\n"
                     "Alerta: INDE alto com IAN baixo\n"
                     "23,4% dos alunos Topázio têm defasagem alta. INDE elevado não garante adequação pedagógica, a gestão "
                     "precisa conhecer essa limitação estrutural do instrumento.\n\n"
-                    "Gap estratégico: coorte Ágata\n"
-                    "A coorte Ágata cresceu apenas +0,03 em dois anos. Com INDE médio de 6,64 e limiar Ametista em 6,9, "
+                    "Gap estratégico: grupo Ágata\n"
+                    "O grupo Ágata cresceu apenas +0,03 em dois anos. Com INDE médio de 6,64 e limiar Ametista em 6,9, "
                     "pequenos ganhos em IDA e IEG podem desbloquear migração de faixa para dezenas de alunos."
                 ),
                 implication=(
                     "Três frentes: (1) manter intervenções que reduzem defasagem em Quartzo e Ágata; (2) criar estratégia "
-                    "específica para coorte Ágata próxima do limiar Ametista; (3) monitorar 'Topázio com IAN <= 5' para "
+                    "específica para o grupo Ágata próximo do limiar Ametista; (3) monitorar 'Topázio com IAN <= 5' para "
                     "blindar sustentabilidade de longo prazo."
                 ),
                 base_visual_text="Gráficos 17, 18 e 19",
@@ -1963,7 +2013,7 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             ),
             practical_meaning=(
                 "A Passos Mágicos opera um programa de recuperação de trajetória, não de aceleração de excelência. Os "
-                "dados mostram isso com clareza: o maior ganho de INDE é da coorte Quartzo (+0,64), a maior redução de "
+                "dados mostram isso com clareza: o maior ganho de INDE é do grupo Quartzo (+0,64), a maior redução de "
                 "defasagem é nas faixas mais baixas, e o programa tem dificuldade em manter os melhores no topo. Isso não "
                 "é fraqueza, é coerência com a missão. Mas tem uma implicação estratégica direta: as métricas de sucesso "
                 "devem medir mobilidade de faixa e redução de defasagem, não INDE médio.\n\n"

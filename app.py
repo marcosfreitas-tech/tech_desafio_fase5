@@ -12,6 +12,7 @@ from tab_modelo_preditivo import render_modelo_preditivo_tab
 st.set_page_config(
     page_title="Passos Mágicos | Datathon Fase 5",
     layout="wide",
+    page_icon="📚",    
     initial_sidebar_state="collapsed",
 )
 st.markdown(
