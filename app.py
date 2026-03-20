@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from tab_analise_exploratoria import render_analise_exploratoria_tab
+from tab_dicionario import render_dicionario_tab
 from tab_modelo_preditivo import render_modelo_preditivo_tab
 
 
@@ -360,7 +361,9 @@ def main() -> None:
         st.error(f"Falha ao carregar os dados: {error}")
         st.stop()
 
-    tab_inicio, tab_eda, tab_modelo = st.tabs(["Início", "Análise exploratória", "Modelo Preditivo"])
+    tab_inicio, tab_eda, tab_modelo, tab_dicionario = st.tabs(
+        ["Início", "Análise exploratória", "Modelo Preditivo", "Dicionário"]
+    )
 
     with tab_inicio:
         render_inicio(df)
@@ -370,6 +373,9 @@ def main() -> None:
 
     with tab_modelo:
         render_modelo_preditivo_tab(df)
+
+    with tab_dicionario:
+        render_dicionario_tab()
 
 
 if __name__ == "__main__":

@@ -1964,8 +1964,8 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
                 base_visual_text="Gráficos 17, 18 e 19",
             )
 
-    st.markdown('<div class="eda-block-title">Bloco 4 - Insights estratégicos</div>', unsafe_allow_html=True)
-    with st.expander("Q11 - Insights estratégicos e criatividade", expanded=True):
+    st.markdown('<div class="eda-block-title">Bloco 4 - Insights</div>', unsafe_allow_html=True)
+    with st.expander("Q11 - Insights", expanded=True):
         render_analysis_header(
             question=(
                 "Você pode adicionar mais insights e pontos de vista não abordados nas perguntas, utilizando a "
@@ -1976,19 +1976,19 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
         )
         render_graph_note(
             analysis=(
-                "1. Ciclo virtuoso oculto: alerta semanal via IEG\n"
+                "1. Alerta semanal via IEG\n"
                 "O IEG é mensurável semanalmente, notas e IDA só aparecem em avaliações formais. Proposta: calcular a "
                 "variação do engajamento individual em relação à média da turma nas últimas 3 semanas. Queda de 1+ ponto "
                 "dispara notificação para o educador responsável, antes que qualquer nota caia. Custo de implementação: "
                 "zero coleta adicional, apenas processamento dos dados já existentes. Sinal semanal: IEG -> Sinal "
                 "bimestral: IDA -> Sinal anual: INDE.\n\n"
-                "2. A janela de ouro: alunos entre faixas Pedra\n"
+                "2. Alunos entre faixas Pedra\n"
                 "O maior retorno marginal está nos alunos próximos dos limiares de transição. Um aluno com INDE 6,70 "
                 "precisa de apenas +0,20 para cruzar para Ametista (6,9). Com IDA pesando 20% no INDE, uma melhora de "
                 "1 ponto nas três notas eleva o INDE em 0,20, suficiente para migrar de faixa. Proposta: criar lista de "
                 "'alunos de limiar' com INDE entre -0,3 e 0 do próximo threshold, e priorizar para reforço acadêmico "
                 "pontual. Gestão de mobilidade, não de média.\n\n"
-                "3. O paradoxo do avaliador: IPP e IPV são a mesma voz\n"
+                "3. Avaliador: IPP e IPV são a mesma voz\n"
                 "IPP (10% do INDE) e IPV (20% do INDE) são avaliados pela mesma equipe, juntos valem 30% do INDE. O "
                 "Random Forest mostrou que IPP explica 53,1% do IPV, em parte porque é o mesmo avaliador respondendo "
                 "sobre o mesmo aluno. Isso cria inflação artificial de 30% do índice com fonte única. Proposta: "
@@ -2021,7 +2021,7 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
                 "sobem pelo menos uma faixa por ciclo anual. Esse indicador captura o que o programa realmente faz bem, "
                 "torna visível o impacto que as médias escondem, e orienta alocação de recursos para onde o retorno é mais alto."
             ),
-            analysis_title="Insights estratégicos",
-            practical_title="Síntese estratégica final",
+            analysis_title="Insights",
+            practical_title="Síntese final",
         )
 

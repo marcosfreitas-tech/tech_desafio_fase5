@@ -882,11 +882,19 @@ def _render_technical_popover(bundle: dict) -> None:
 
         st.markdown("**Desempenho no teste temporal (2023)**")
         c1, c2 = st.columns(2)
-        c1.metric("Recall", f"{metrics['recall'] * 100:.1f}%")
-        c2.metric("AUC-ROC", f"{metrics['roc_auc']:.3f}")
+        with c1:
+            st.metric("Recall", f"{metrics['recall'] * 100:.1f}%")
+            st.caption("Sensibilidade: proporção dos casos de risco que o modelo consegue identificar.")
+        with c2:
+            st.metric("AUC-ROC", f"{metrics['roc_auc']:.3f}")
+            st.caption("Capacidade de separar risco vs. não risco em todos os limiares (quanto maior, melhor).")
         c3, c4 = st.columns(2)
-        c3.metric("Precisão", f"{metrics['precision'] * 100:.1f}%")
-        c4.metric("F1-score", f"{metrics['f1'] * 100:.1f}%")
+        with c3:
+            st.metric("Precisão", f"{metrics['precision'] * 100:.1f}%")
+            st.caption("Entre os casos marcados como risco, quantos realmente eram risco.")
+        with c4:
+            st.metric("F1-score", f"{metrics['f1'] * 100:.1f}%")
+            st.caption("Média harmônica entre Precisão e Recall: equilíbrio entre detectar e errar menos.")
 
         _render_feature_importance(bundle)
 
