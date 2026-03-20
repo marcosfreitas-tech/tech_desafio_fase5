@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import re
 
 import numpy as np
@@ -114,6 +115,9 @@ def plotly_chart_numbered(
     *,
     apply_full_names: bool = True,
     prefix_title: bool = True,
+    analysis_title: str = "Leitura do gráfico",
+    practical_title: str = "O que isso significa na prática",
+    expand_note_text: bool = False,
 ) -> int:
     if apply_full_names:
         apply_full_names_to_figure(fig)
@@ -138,6 +142,9 @@ def plotly_chart_numbered(
         render_graph_note(
             analysis=analysis or "Leitura descritiva não informada.",
             practical_meaning=practical_meaning or "Interpretação prática não informada.",
+            analysis_title=analysis_title,
+            practical_title=practical_title,
+            expand_text=expand_note_text,
         )
     return graph_number
 
@@ -158,31 +165,50 @@ def render_analysis_header(question: str, importance: str, approach: str) -> Non
     c2.markdown(f"**Como foi analisado:** {expand_abbreviations(approach)}")
 
 
-def render_exec_note(message: str, implication: str, graph_refs: list[int] | None = None) -> None:
-    refs_text = format_graph_refs(graph_refs)
+def format_card_text(text: str, *, expand_text: bool = False) -> str:
+    raw_text = expand_abbreviations(text) if expand_text else text
+    return html.escape(raw_text).replace("\n", "<br>")
+
+
+def render_exec_note(
+    message: str,
+    implication: str,
+    graph_refs: list[int] | None = None,
+    *,
+    base_visual_text: str | None = None,
+    expand_text: bool = False,
+) -> None:
+    refs_text = base_visual_text or format_graph_refs(graph_refs)
     st.markdown(
         f"""
         <div class="eda-note">
         <strong>Conclusão</strong><br>
-        {expand_abbreviations(message)}<br><br>
+        {format_card_text(message, expand_text=expand_text)}<br><br>
         <strong>Implicação prática</strong><br>
-        {expand_abbreviations(implication)}<br><br>
+        {format_card_text(implication, expand_text=expand_text)}<br><br>
         <strong>Base visual</strong><br>
-        {refs_text}
+        {format_card_text(refs_text)}
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-def render_graph_note(analysis: str, practical_meaning: str) -> None:
+def render_graph_note(
+    analysis: str,
+    practical_meaning: str,
+    *,
+    analysis_title: str = "Leitura do gráfico",
+    practical_title: str = "O que isso significa na prática",
+    expand_text: bool = False,
+) -> None:
     st.markdown(
         f"""
         <div class="eda-note">
-        <strong>Leitura do gráfico</strong><br>
-        {expand_abbreviations(analysis)}<br><br>
-        <strong>O que isso significa na prática</strong><br>
-        {expand_abbreviations(practical_meaning)}
+        <strong>{format_card_text(analysis_title)}</strong><br>
+        {format_card_text(analysis, expand_text=expand_text)}<br><br>
+        <strong>{format_card_text(practical_title)}</strong><br>
+        {format_card_text(practical_meaning, expand_text=expand_text)}
         </div>
         """,
         unsafe_allow_html=True,
@@ -237,12 +263,17 @@ def render_corr(df: pd.DataFrame) -> int:
         fig_corr,
         "Cores mais intensas indicam relações mais fortes.",
         analysis=(
-            "As correlações mais fortes aparecem no bloco acadêmico-comportamental, "
-            "indicando que desempenho e engajamento caminham juntos na base."
+            "As correlações mais fortes concentram-se no bloco acadêmico: IDA lidera com ro=0,78 em relação ao INDE, "
+            "seguida por IEG (0,69) e IPV (0,70). As notas de Matemática, Português e Inglês correlacionam fortemente "
+            "com IDA (0,83-0,85), revelando que o caminho até o INDE passa por IDA como intermediário, não pelas notas "
+            "diretamente. IAN e Defasagem escolar apresentam correlação elevada entre si (0,93), mas ambas têm impacto "
+            "fraco sobre o INDE (aprox. 0,41-0,43). IPS e IAA são dimensões praticamente isoladas do restante da estrutura."
         ),
         practical_meaning=(
-            "Na prática, a gestão deve priorizar ações que melhorem desempenho acadêmico e engajamento ao mesmo tempo, "
-            "porque esse conjunto tende a gerar efeito sistêmico no indicador global."
+            "O INDE não responde diretamente às notas, responde ao IDA, que é composto por elas. Monitorar só a nota sem "
+            "acompanhar o IDA como variável de controle pode gerar a ilusão de melhora sem efeito sistêmico. Além disso, "
+            "IPV correlaciona com IDA (0,56) e IEG (0,55), sugerindo que alunos em ponto de virada já apresentam "
+            "deterioração cruzada, tornando o IPV um sinal de alerta precoce, não apenas um marcador de risco tardio."
         ),
         apply_full_names=False,
         prefix_title=False,
@@ -282,11 +313,16 @@ def render_q1(df: pd.DataFrame) -> dict[str, int]:
         fig_ian_line,
         "O IAN médio mostra tendência de melhoria no período.",
         analysis=(
-            "A curva do IAN médio sobe ao longo dos anos, sugerindo recuperação gradual do nível de aprendizagem."
+            "O IAN médio sobe de forma consistente: 6,43 em 2022, 7,24 em 2023 e 7,68 em 2024, ganho acumulado de "
+            "+1,25 pontos em dois anos. O ritmo desacelera (+0,81 de 2022-2023 e +0,44 de 2023-2024).\n\n"
+            "D = Fase Efetiva - Fase Ideal | IAN: 10 (em fase) / 5 (moderada) / 2,5 (severa).\n\n"
+            "O IAN não é uma nota contínua, é variável discreta com apenas 3 valores possíveis. A média subindo é uma "
+            "mudança na distribuição entre esses grupos, não uma curva suave."
         ),
         practical_meaning=(
-            "Isso indica ganho estrutural do programa; a ONG deve preservar as ações que sustentaram essa subida "
-            "e evitar descontinuidade no acompanhamento."
+            "A melhora do IAN indica que mais alunos estão progredindo dentro do nível esperado. No entanto, a "
+            "desaceleração entre 2023 e 2024 merece atenção: ganhos fáceis (recuperação de casos mais leves) tendem a "
+            "ocorrer primeiro. A média crescente pode estar mascarando uma cauda de alunos que não avançaram."
         ),
     )
 
@@ -348,13 +384,6 @@ def render_q1(df: pd.DataFrame) -> dict[str, int]:
     graph_refs["ian_mix"] = plotly_chart_numbered(
         fig_ian_mix,
         "A redução da faixa de defasagem alta e o avanço da faixa adequada são sinais de evolução estrutural.",
-        analysis=(
-            "A participação de alunos na faixa de defasagem alta diminui, enquanto a faixa adequada cresce no período."
-        ),
-        practical_meaning=(
-            "Na prática, há migração de risco para proficiência. O próximo passo é concentrar reforço "
-            "no grupo que permanece na faixa crítica para acelerar a convergência."
-        ),
     )
 
     ian_by_gender = (
@@ -389,13 +418,6 @@ def render_q1(df: pd.DataFrame) -> dict[str, int]:
     graph_refs["ian_genero"] = plotly_chart_numbered(
         fig_ian_gender,
         "O recorte por sexo ajuda a identificar grupos com maior necessidade de apoio pedagógico.",
-        analysis=(
-            "O recorte por sexo revela diferenças persistentes nas taxas de defasagem alta entre os grupos."
-        ),
-        practical_meaning=(
-            "Isso significa que metas agregadas podem esconder desigualdades; a gestão precisa definir "
-            "metas segmentadas por sexo e monitorar o fechamento desses gaps."
-        ),
     )
 
     ian_gender_pivot = ian_by_gender.pivot(index="genero", columns="ano_referencia", values="percentual_defasagem_alta")
@@ -440,13 +462,6 @@ def render_q1(df: pd.DataFrame) -> dict[str, int]:
         graph_refs["ian_variacao_genero"] = plotly_chart_numbered(
             fig_gender_variation,
             "A variação entre períodos mostra ritmo de melhora distinto entre os sexos.",
-            analysis=(
-                "A velocidade de queda da defasagem não é igual entre os sexos em todos os períodos analisados."
-            ),
-            practical_meaning=(
-                "Na prática, a intensidade da intervenção deve ser calibrada por grupo para evitar que um segmento "
-                "avance menos e mantenha bolsões de risco."
-            ),
         )
 
     age_analysis = df.dropna(subset=["ian", "idade"]).copy()
@@ -485,13 +500,6 @@ def render_q1(df: pd.DataFrame) -> dict[str, int]:
     graph_refs["ian_faixa_etaria"] = plotly_chart_numbered(
         fig_ian_age,
         "A segmentação por faixa etária orienta ações direcionadas por ciclo de aprendizagem.",
-        analysis=(
-            "As faixas etárias apresentam níveis diferentes de defasagem, com alguns ciclos concentrando maior risco."
-        ),
-        practical_meaning=(
-            "Isso pede trilhas pedagógicas por ciclo: reforço de base nas séries iniciais e recuperação intensiva "
-            "nas faixas com maior atraso acumulado."
-        ),
     )
     return graph_refs
 
@@ -526,11 +534,18 @@ def render_q2(df: pd.DataFrame) -> dict[str, int]:
         fig_ida_line,
         "A série anual revela ganho inicial e necessidade de sustentação no último ano.",
         analysis=(
-            "O IDA melhora no início da janela e depois desacelera, indicando perda de ritmo no ganho acadêmico."
+            "O IDA médio apresenta um padrão de pico e retração: sobe de 6,10 em 2022 para 6,66 em 2023 (+0,56), "
+            "depois recua para 6,35 em 2024 (-0,31). O padrão não é desaceleração, é reversão parcial.\n\n"
+            "IDA = (Nota Matemática + Nota Português + Nota Inglês) / 3.\n\n"
+            "Com peso de 20% no INDE (Fases 0-7) e 40% na Fase 8, uma queda de 0,31 no IDA se traduz em -0,062 no INDE "
+            "nas fases regulares e -0,124 na Fase 8. Como IDA é a alavanca de maior correlação com o INDE (ro=0,78), "
+            "essa reversão tem impacto quantificável e imediato no índice global."
         ),
         practical_meaning=(
-            "Na prática, além de gerar melhora inicial, o programa precisa de mecanismos de sustentação "
-            "para evitar estagnação após os primeiros avanços."
+            "O programa gerou melhora inicial, mas não conseguiu consolidar esse patamar. A questão central não é por que "
+            "caiu, mas: o que mudou entre 2023 e 2024 nas condições de aprendizagem ou na intensidade das intervenções? "
+            "Alunos na Fase 8 têm peso de IDA dobrado (40%): para esse grupo, a mesma queda de 0,31 gera o dobro do "
+            "impacto no INDE."
         ),
     )
 
@@ -555,13 +570,6 @@ def render_q2(df: pd.DataFrame) -> dict[str, int]:
     graph_refs["ida_distribuicao"] = plotly_chart_numbered(
         fig_ida_violin,
         "A distribuição mostra heterogeneidade entre estudantes, além da média global.",
-        analysis=(
-            "Mesmo com média favorável, a dispersão mostra grupos com trajetórias acadêmicas muito diferentes."
-        ),
-        practical_meaning=(
-            "Isso significa que só olhar média não basta; a ONG deve operar com trilhas por perfil "
-            "para reduzir desigualdade de aprendizagem."
-        ),
     )
     return graph_refs
 
@@ -627,11 +635,21 @@ def render_q3(df: pd.DataFrame) -> dict[str, int] | None:
         fig_corr_q3,
         "As correlações positivas sustentam o uso do engajamento como sinal operacional de desempenho.",
         analysis=(
-            "As correlações entre engajamento, desempenho acadêmico e ponto de virada se mantêm positivas entre os anos."
+            "As três correlações se mantêm positivas e moderadas ao longo de todo o período, mas com trajetórias distintas:\n\n"
+            "Par de indicadores | 2022 | 2023 | 2024 | Delta 22-24\n"
+            "IEG x IDA | 0,51 | 0,45 | 0,52 | +0,01\n"
+            "IEG x IPV | 0,54 | 0,49 | 0,55 | +0,01\n"
+            "IDA x IPV | 0,62 | 0,55 | 0,55 | -0,07\n\n"
+            "Destaque para 2023: todas as correlações caíram simultaneamente e se recuperaram em 2024, exceto IDA x IPV, "
+            "que ficou estacionada. Isso sugere que 2023 foi um ano atípico na estrutura relacional entre os indicadores, "
+            "não apenas nos valores médios."
         ),
         practical_meaning=(
-            "Na prática, queda de engajamento é um alerta operacional antecipado. "
-            "Monitorar esse indicador continuamente ajuda a agir antes da queda de resultado."
+            "IEG mede tarefas realizadas e registradas (lição de casa, atividades acadêmicas, voluntariado). IPV é uma "
+            "avaliação longitudinal feita por educadores. A correlação IEG x IPV de 0,54-0,55 indica que os avaliadores, "
+            "ao julgar quem está em ponto de virada, estão capturando o mesmo comportamento que o IEG registra "
+            "objetivamente, validando o IEG como proxy rastreável do IPV. Como IEG vale 20% no INDE (igual ao IDA) e "
+            "correlaciona com IPV (mais 20%), monitorar o IEG equivale a monitorar indiretamente 40% do INDE ao mesmo tempo."
         ),
     )
 
@@ -672,13 +690,6 @@ def render_q3(df: pd.DataFrame) -> dict[str, int] | None:
     graph_refs["q3_disp_ieg_ida"] = plotly_chart_numbered(
         fig_scatter_ieg_ida,
         "A inclinação positiva das linhas de tendência reforça a associação entre engajamento e resultado acadêmico.",
-        analysis=(
-            "As linhas de tendência sobem em todos os anos, indicando que maior engajamento vem acompanhado de maior IDA."
-        ),
-        practical_meaning=(
-            "Isso sugere que políticas para elevar presença e participação têm efeito indireto sobre desempenho acadêmico, "
-            "não apenas sobre comportamento."
-        ),
     )
 
     fig_scatter_ieg_ipv = px.scatter(
@@ -714,13 +725,6 @@ def render_q3(df: pd.DataFrame) -> dict[str, int] | None:
     graph_refs["q3_disp_ieg_ipv"] = plotly_chart_numbered(
         fig_scatter_ieg_ipv,
         "O padrão também aparece para IPV, indicando que engajamento antecede pontos de virada.",
-        analysis=(
-            "A relação positiva entre engajamento e IPV repete o padrão observado com IDA."
-        ),
-        practical_meaning=(
-            "Na prática, fortalecer engajamento aumenta a chance de ponto de virada favorável, "
-            "então esse eixo deve entrar cedo no plano de intervenção."
-        ),
     )
     return graph_refs
 
@@ -752,11 +756,22 @@ def render_q4(df: pd.DataFrame) -> int:
         fig_coherence,
         "Distribuições deslocadas para a direita indicam superestimação; para a esquerda, subestimação.",
         analysis=(
-            "A distribuição do desvio em torno de zero mostra coexistência de alunos que superestimam e subestimam seu desempenho."
+            "A distribuição do desvio (IAA menos média de IDA e IEG) está centrada levemente à direita de zero em todos os "
+            "anos, a maioria dos alunos se autoavalia acima do que os indicadores objetivos registram. Em 2024, a "
+            "distribuição se desloca visivelmente para a direita em relação a 2022.\n\n"
+            "Perfil | Percentual | Interpretação\n"
+            "Superestimam (IAA > IDA+IEG) | 61,8% | Vínculo com o programa - alavancagem afetiva\n"
+            "Alinhamento coerente | ~19% | Referência de calibração\n"
+            "Subestimam (IAA < IDA+IEG) | 19,2% | PRIORIDADE - risco de abandono\n\n"
+            "IAA = Soma das respostas / 6 perguntas | peso no INDE: 10%.\n\n"
+            "O IAA mede percepção de bem-estar e pertencimento sobre 6 dimensões: consigo mesmo, estudos, família, amigos, "
+            "Associação e professores, não autopercepção de competência acadêmica."
         ),
         practical_meaning=(
-            "Isso significa que autoavaliação é útil, mas não pode ser lida isoladamente; "
-            "a decisão de intervenção deve combinar percepção do aluno com métricas objetivas."
+            "O desvio positivo não é sinal de arrogância, pode refletir um aluno que se sente bem na Associação mas ainda "
+            "não converteu esse bem-estar em desempenho. IAA alto com IDA baixo é evidência de que o programa criou "
+            "pertencimento antes de gerar desempenho. A sequência emocional precede a sequência acadêmica, isso é "
+            "pedagogicamente saudável e estrategicamente valioso."
         ),
     )
     return graph_ref
@@ -879,11 +894,24 @@ def render_q5_q6(df_long: pd.DataFrame) -> dict[str, int] | None:
         fig_pattern,
         "O perfil combinado IPS baixo + IPP baixo concentra maior risco de deterioração no ano seguinte.",
         analysis=(
-            "O gráfico mostra gradiente de risco: o perfil com fragilidade simultânea em IPS e IPP concentra as maiores quedas futuras."
+            "O perfil combinado IPS + IPP determina a probabilidade de queda futura nos três indicadores:\n\n"
+            "Perfil combinado | Queda IAN | Queda IDA | Queda IEG | Risco\n"
+            "IPS não baixo + IPP não baixo | 13,1% | 39,0% | 30,4% | Menor\n"
+            "IPS baixo + IPP não baixo | 2,7% | 34,0% | 31,3% | Atenção\n"
+            "IPS não baixo + IPP baixo | 22,2% | 30,4% | 43,7% | Elevado\n"
+            "IPS baixo + IPP baixo | 17,1% | 40,0% | 45,7% | MAIOR\n\n"
+            "O Gráfico 14 revela: 67,8% dos alunos com IPP frágil (<=7) apresentam IAN com defasagem alta (<=5), sinal "
+            "psicopedagógico e acadêmico alinhados. Mas 32,2% desse mesmo grupo tem IAN sem defasagem alta, o sinal "
+            "pedagógico existe, mas a defasagem ainda não se instalou."
         ),
         practical_meaning=(
-            "Na prática, esse grupo deve ser priorizado em protocolo preventivo com ação psicossocial e pedagógica integrada."
+            "IPS é avaliado por psicólogos (comportamental, emocional, social) e IPP por educadores e psicopedagogos "
+            "(cognitivo, comportamental, socialização). O detalhe mais revelador: o perfil 'IPS baixo + IPP não baixo' "
+            "tem queda de IAN de apenas 2,7%, sugerindo que quando o suporte psicopedagógico está adequado, o risco "
+            "psicossocial isolado não se converte em defasagem de nível. Evidência de que IPP funciona como amortecedor "
+            "do risco psicossocial."
         ),
+        analysis_title="Leitura dos gráficos",
     )
 
     prior["perfil_ipp_clinico"] = np.where(prior["ipp"] <= 7, "IPP fragil (<= 7)", "IPP adequado (> 7)")
@@ -911,13 +939,6 @@ def render_q5_q6(df_long: pd.DataFrame) -> dict[str, int] | None:
     graph_refs["q6_matriz_ipp_ian"] = plotly_chart_numbered(
         fig_ipp_ian,
         "A leitura conjunta de IPP e IAN indica alinhamentos e contradições entre sinal psicopedagógico e risco de defasagem.",
-        analysis=(
-            "Há alinhamento relevante entre os perfis, mas também uma fração não desprezível de contradições."
-        ),
-        practical_meaning=(
-            "Isso indica que triagem de risco deve usar régua combinada (acadêmica + psicopedagógica), "
-            "evitando decisões baseadas em um único indicador."
-        ),
     )
     return graph_refs
 
@@ -970,11 +991,24 @@ def render_q7(df: pd.DataFrame) -> dict | None:
         fig_ipv_imp,
         "Quanto maior a barra, maior a influência do indicador na explicação do ponto de virada.",
         analysis=(
-            "As importâncias mostram concentração da explicação do IPV em poucos indicadores-chave."
+            "O modelo Random Forest identifica a importância relativa de cada indicador para explicar o IPV. Três variáveis "
+            "respondem por 89,5% da explicação total:\n\n"
+            "Indicador | Importância | % do total | Interpretação\n"
+            "IPP - Psicopedagógico | 0,531 | 53,1% | Driver dominante - mesmo avaliador\n"
+            "IEG - Engajamento | 0,230 | 23,0% | 2o driver - comportamento rastreável\n"
+            "IDA - Desempenho | 0,134 | 13,4% | 3o driver - nota não é pré-requisito\n"
+            "IPS - Psicossocial | 0,062 | 6,2% | Complementar\n"
+            "IAA - Autoavaliação | 0,031 | 3,1% | Baixa influência direta\n"
+            "IAN - Adequação nível | 0,012 | 1,2% | Quase irrelevante para IPV\n\n"
+            "ALERTA METODOLÓGICO: IPP e IPV são avaliados pela mesma equipe de educadores e psicopedagogos. A importância "
+            "de 53,1% do IPP pode refletir parcialmente consistência interna do avaliador, não apenas causalidade real. É "
+            "mais preciso dizer que 'quem avalia bem IPP tende a avaliar bem IPV' do que 'IPP causa IPV'."
         ),
         practical_meaning=(
-            "Na prática, focar nos principais drivers tende a gerar maior retorno por recurso investido "
-            "do que distribuir esforço de forma homogênea."
+            "IAN aparece com apenas 1,2% de importância, o resultado mais contraintuitivo. Defasagem de nível quase não "
+            "explica o ponto de virada. Um aluno defasado pode atingir o ponto de virada; um aluno em fase pode não atingi-lo. "
+            "O ponto de virada depende de transformação, não de posição. Isso contradiz a intuição de que 'recuperar "
+            "defasagem = ponto de virada'."
         ),
     )
     top = ipv_importance.iloc[0]
@@ -1046,11 +1080,21 @@ def render_q8(df: pd.DataFrame) -> tuple[pd.DataFrame, int | None]:
         fig_import_inde,
         "IDA e IEG tendem a formar o núcleo explicativo do INDE, com IPS/IPP agregando refinamento.",
         analysis=(
-            "O modelo indica predominância de desempenho acadêmico e engajamento na explicação do INDE."
+            "O modelo Random Forest (R2 treino = 0,877; R2 teste = 0,804) explica com alta fidelidade a variação do INDE. "
+            "A distribuição de importância é altamente concentrada:\n\n"
+            "Indicador | Importância RF | Peso formal INDE (0-7) | Divergência\n"
+            "IDA | 58,6% | 20% | RF 2,9x maior - efeito sistêmico\n"
+            "IEG | 28,7% | 20% | RF 1,4x maior - alinhado\n"
+            "IPS | 6,6% | 10% | RF menor - indicador de triagem\n"
+            "IPP | 6,1% | 10% | RF menor - indicador de triagem\n\n"
+            "IDA explica 58,6% da variação observada no INDE, mas vale apenas 20% no cálculo formal. Isso não é "
+            "incoerência, é sinal de que IDA funciona como proxy sistêmico: quando ele sobe, outros indicadores sobem "
+            "junto. A multidimensionalidade do INDE é sistêmica, não apenas estrutural."
         ),
         practical_meaning=(
-            "Isso sugere uma estratégia em camadas: eixo central acadêmico-engajamento e apoio psicossocial "
-            "direcionado para perfis de maior vulnerabilidade."
+            "IDA + IEG respondem por 87,3% da explicação do INDE no modelo. A melhor combinação observada, IDA alto + "
+            "IEG alto + IPS alto + IPP alto, resulta em INDE médio de 8,74 (n=43, apenas 2,2% da amostra de 1985). "
+            "O teto de excelência é estreito: a questão estratégica é como expandir a faixa Ametista, não apenas manter o Topázio."
         ),
     )
 
@@ -1181,11 +1225,30 @@ def render_q10(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
         fig_phase_inde,
         "A comparação por fase mostra diferenças de nível de INDE ao longo do tempo.",
         analysis=(
-            "As fases não evoluem no mesmo ritmo: algumas consolidam patamar mais alto de INDE, enquanto outras avançam menos."
+            "Três gráficos compõem esta análise, cada um revela uma camada distinta da efetividade:\n\n"
+            "Pedra (faixa PEDE) | INDE 2022 | INDE 2024 | Delta INDE | Risco IAN 2022 | Risco IAN 2024 | Delta Risco\n"
+            "Quartzo (2,4-5,5) | 5,24 | 5,40 | +0,16 | 88,5% | 70,4% | -18,1 pp\n"
+            "Ágata (5,5-6,9) | 6,61 | 6,60 | -0,01 | 85,6% | 67,1% | -18,5 pp\n"
+            "Ametista (6,9-8,2) | 7,53 | 7,54 | +0,01 | 65,5% | 54,5% | -11,0 pp\n"
+            "Topázio (8,2-9,3) | 8,37 | 8,47 | +0,10 | 32,3% | 23,4% | -8,9 pp\n\n"
+            "Trajetória por coorte de entrada (Gráfico 19):\n"
+            "Coorte inicial | INDE 2022 | INDE 2024 | Ganho total | Interpretação\n"
+            "Quartzo | 5,24 | 5,88 | +0,64 | Maior ganho - programa mais efetivo aqui\n"
+            "Ágata | 6,61 | 6,64 | +0,03 | ESTAGNAÇÃO - gap estratégico prioritário\n"
+            "Ametista | 7,53 | 7,50 | -0,03 | Quase estável - manutenção\n"
+            "Topázio | 8,37 | 8,25 | -0,12 | Queda - programa tem dificuldade no topo\n\n"
+            "PARADOXO CENTRAL: o Topázio tem o maior INDE absoluto (8,47 em 2024), mas a coorte que entrou como Topázio "
+            "perdeu -0,12 pontos. O programa eleva mais quem está mais baixo e mantém, com dificuldade, quem já está no "
+            "topo. Isso é coerência com a missão, mas precisa ser explicitado para gestão de expectativas."
         ),
         practical_meaning=(
-            "Na prática, a gestão deve replicar práticas das fases com melhor evolução e reforçar suporte nas fases com estagnação."
+            "O Gráfico 17 pode dar impressão de estabilidade (barras quase iguais entre 2022 e 2024). O Gráfico 18 mostra "
+            "que por baixo dessa estabilidade há redução real de defasagem em TODAS as faixas. O programa avança mais na "
+            "adequação de nível do que na elevação do INDE médio, e esse resultado positivo não aparece na leitura isolada "
+            "das médias. Adicionalmente: 23,4% dos alunos Topázio têm IAN <= 5. Como IAN vale 10% do INDE, é possível ter "
+            "INDE 8,3+ com dois anos de defasagem de nível, invisível nos relatórios de média."
         ),
+        analysis_title="Leitura dos gráficos",
     )
 
     fig_phase_risk = px.bar(
@@ -1210,12 +1273,6 @@ def render_q10(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
     graph_refs["q10_fase_risco"] = plotly_chart_numbered(
         fig_phase_risk,
         "Comparar nível de INDE com risco de defasagem ajuda a identificar fases com melhor equilíbrio.",
-        analysis=(
-            "O risco de defasagem (IAN <= 5) varia por fase e não cai de forma uniforme no tempo."
-        ),
-        practical_meaning=(
-            "Isso orienta alocação proporcional de tutoria e apoio socioemocional, priorizando fases com maior concentração de risco."
-        ),
     )
 
     cohort = program.dropna(subset=["inde_ano"]).copy()
@@ -1280,12 +1337,6 @@ def render_q10(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
     graph_refs["q10_coorte_inde"] = plotly_chart_numbered(
         fig_cohort,
         "A leitura por coorte evidencia heterogeneidade de trajetória e orienta ações específicas.",
-        analysis=(
-            "As coortes de entrada apresentam trajetórias diferentes de INDE, com ganhos distintos ao longo dos anos."
-        ),
-        practical_meaning=(
-            "Na prática, metas por coorte melhoram a gestão, pois evitam que a média geral esconda grupos com baixa evolução."
-        ),
     )
     return cohort_evolution, graph_refs
 
@@ -1323,23 +1374,26 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             importance="Define o eixo de priorização das análises seguintes.",
             approach="Correlação de Spearman entre indicadores acadêmicos, comportamentais e de risco.",
         )
-        corr_ref = render_corr(df)
-        inde_cols = ["inde_ano", "ida", "ieg", "ips", "ipp", "ian", "ipv"]
-        inde_cols = [c for c in inde_cols if c in df.columns]
-        if len(inde_cols) >= 3:
-            corr = df[inde_cols].corr(method="spearman")
-            inde_corr = corr.loc["inde_ano"].drop("inde_ano").sort_values(ascending=False)
-            top1 = inde_corr.index[0]
-            top2 = inde_corr.index[1] if len(inde_corr) > 1 else None
-            top2_txt = f"{top2.upper()} ({inde_corr.iloc[1]:.2f})" if top2 is not None else "N/A"
-            render_exec_note(
-                message=f"Maior associação com INDE: {top1.upper()} ({inde_corr.iloc[0]:.2f}). Segundo fator: {top2_txt}.",
-                implication=(
-                    "Priorizar frentes acadêmicas e de engajamento tende a mover o indicador global com maior eficiência. "
-                    "Na prática, isso significa direcionar recursos para ações com maior efeito transversal antes de expandir iniciativas periféricas."
-                ),
-                graph_refs=[corr_ref],
-            )
+        render_corr(df)
+        render_exec_note(
+            message=(
+                "Alavancas primárias\n"
+                "IDA (0,78), IEG (0,69) e IPV (0,70) - alta correlação com o INDE, efeito transversal confirmado.\n\n"
+                "Indicador precoce\n"
+                "IPV sinaliza deterioração antes que o INDE caia, pela sua correlação cruzada com IDA e IEG.\n\n"
+                "Ponto de atenção\n"
+                "IAN e Defasagem têm correlação mútua de 0,93, mas impacto fraco sobre o INDE, parecem urgentes, mas "
+                "não são alavancas do índice global.\n\n"
+                "Dimensões isoladas\n"
+                "IPS (0,26) e IAA (0,36) - relevantes por outras razões, mas sem retorno sistêmico esperado no INDE."
+            ),
+            implication=(
+                "A ordem de priorização sugere: (1) fortalecer IDA como variável de controle principal; (2) usar o IPV "
+                "como triagem antecipada; (3) tratar IEG como alavanca paralela com efeito direto no índice; (4) não "
+                "confundir a alta correlação IAN-Defasagem com impacto sobre o INDE."
+            ),
+            base_visual_text="Gráfico 1",
+        )
 
     with st.expander("Q1 - IAN: perfil de defasagem e evolução temporal", expanded=True):
         render_analysis_header(
@@ -1347,93 +1401,25 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             importance="IAN é o termômetro principal de risco pedagógico.",
             approach="Série temporal de média, composição por faixa de risco e recortes por sexo/faixa etária.",
         )
-        q1_refs = render_q1(df)
-        ian_summary = (
-            df.dropna(subset=["ian"])
-            .groupby("ano_referencia", as_index=False)
-            .agg(
-                ian_medio=("ian", "mean"),
-                percentual_defasagem_alta=("ian", lambda s: (s <= 5).mean() * 100),
-                percentual_adequado=("ian", lambda s: (s > 7).mean() * 100),
-            )
-            .sort_values("ano_referencia")
+        render_q1(df)
+        render_exec_note(
+            message=(
+                "Positivo\n"
+                "Trajetória ascendente sem reversão - sinal de consistência programática, não de flutuação pontual.\n\n"
+                "Atenção\n"
+                "A desaceleração em 2024 (+0,44 vs +0,81 no ano anterior) pode indicar que os ganhos mais acessíveis já "
+                "foram capturados, os próximos exigirão intervenções mais intensivas.\n\n"
+                "Limite da análise\n"
+                "A média crescente não informa sobre a distribuição: alunos na faixa de risco elevado podem estar sendo "
+                "puxados pela melhora dos demais sem avançar eles mesmos."
+            ),
+            implication=(
+                "A ONG deve preservar as ações que sustentaram essa trajetória. Para o próximo ciclo, a prioridade "
+                "analítica é desagregar o IAN por faixa de risco para verificar se alunos com defasagem severa estão de "
+                "fato avançando. Isso define se a estratégia é manutenção ou intensificação."
+            ),
+            base_visual_text="Gráfico 2",
         )
-        if len(ian_summary) >= 2:
-            ian_start = ian_summary.iloc[0]
-            ian_end = ian_summary.iloc[-1]
-            traj_defasagem_alta = " -> ".join(ian_summary["percentual_defasagem_alta"].map(lambda v: f"{v:.1f}%"))
-            traj_adequado = " -> ".join(ian_summary["percentual_adequado"].map(lambda v: f"{v:.1f}%"))
-            delta_defasagem_alta = ian_end["percentual_defasagem_alta"] - ian_start["percentual_defasagem_alta"]
-            delta_adequado = ian_end["percentual_adequado"] - ian_start["percentual_adequado"]
-
-            ian_by_gender = (
-                df.dropna(subset=["ian", "genero", "ano_referencia"])
-                .groupby(["ano_referencia", "genero"], as_index=False)
-                .agg(
-                    percentual_defasagem_alta=("ian", lambda s: (s <= 5).mean() * 100),
-                    percentual_adequado=("ian", lambda s: (s > 7).mean() * 100),
-                )
-                .sort_values(["ano_referencia", "genero"])
-            )
-
-            end_year = int(ian_end["ano_referencia"])
-            gender_msg = "Não houve amostra suficiente para comparar sexo no ano final."
-            gender_traj_msg = ""
-            if not ian_by_gender.empty:
-                end_gender = ian_by_gender[ian_by_gender["ano_referencia"] == end_year].copy()
-                if len(end_gender) >= 2:
-                    end_gender_high = end_gender.sort_values("percentual_defasagem_alta", ascending=False)
-                    g_high_1 = end_gender_high.iloc[0]
-                    g_high_2 = end_gender_high.iloc[1]
-                    gap_high = g_high_1["percentual_defasagem_alta"] - g_high_2["percentual_defasagem_alta"]
-
-                    end_gender_adequado = end_gender.sort_values("percentual_adequado", ascending=False)
-                    g_ok_1 = end_gender_adequado.iloc[0]
-                    g_ok_2 = end_gender_adequado.iloc[1]
-                    gap_ok = g_ok_1["percentual_adequado"] - g_ok_2["percentual_adequado"]
-
-                    gender_msg = (
-                        f"No recorte por sexo em {end_year}, {g_high_1['genero']} concentrou maior defasagem alta "
-                        f"({g_high_1['percentual_defasagem_alta']:.1f}% vs {g_high_2['percentual_defasagem_alta']:.1f}%; "
-                        f"diferença de {gap_high:.1f} p.p.). "
-                        f"No perfil adequado, {g_ok_1['genero']} liderou "
-                        f"({g_ok_1['percentual_adequado']:.1f}% vs {g_ok_2['percentual_adequado']:.1f}%; "
-                        f"diferença de {gap_ok:.1f} p.p.)."
-                    )
-
-                rows = []
-                for genero, part in ian_by_gender.groupby("genero"):
-                    part = part.sort_values("ano_referencia")
-                    if len(part) < 2:
-                        continue
-                    alta_ini = part["percentual_defasagem_alta"].iloc[0]
-                    alta_fim = part["percentual_defasagem_alta"].iloc[-1]
-                    ok_ini = part["percentual_adequado"].iloc[0]
-                    ok_fim = part["percentual_adequado"].iloc[-1]
-                    rows.append(
-                        f"{genero}: defasagem alta {alta_ini:.1f}% -> {alta_fim:.1f}% ({alta_fim - alta_ini:+.1f} p.p.); "
-                        f"adequado {ok_ini:.1f}% -> {ok_fim:.1f}% ({ok_fim - ok_ini:+.1f} p.p.)"
-                    )
-                if rows:
-                    gender_traj_msg = "<br>Trajetória por sexo no período: " + " | ".join(rows) + "."
-
-            render_exec_note(
-                message=(
-                    f"IAN médio evoluiu de {ian_start['ian_medio']:.2f} para {ian_end['ian_medio']:.2f}.<br>"
-                    f"Trajetória da defasagem alta (IAN <= 5): {traj_defasagem_alta} "
-                    f"({delta_defasagem_alta:+.1f} p.p. no período).<br>"
-                    f"Trajetória do perfil adequado (IAN > 7): {traj_adequado} "
-                    f"({delta_adequado:+.1f} p.p. no período).<br>"
-                    f"{gender_msg}{gender_traj_msg}"
-                ),
-                implication=(
-                    "Os gráficos indicam migração consistente de alunos do perfil de maior risco para o perfil adequado, "
-                    "mas com diferenças entre sexos. A ação recomendada é manter a estratégia de melhoria geral e "
-                    "incluir metas segmentadas por sexo/faixa etária para reduzir os bolsões de defasagem. "
-                    "Sem segmentação, a média melhora, mas os grupos com maior atraso tendem a permanecer para trás."
-                ),
-                graph_refs=list(q1_refs.values()),
-            )
 
     with st.expander("Q2 - IDA: melhora, estagnação ou queda", expanded=True):
         render_analysis_header(
@@ -1441,25 +1427,26 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             importance="IDA resume aprendizagem e ajuda a medir retorno das intervenções.",
             approach="Comparação anual de média e distribuição para capturar tendência e volatilidade.",
         )
-        q2_refs = render_q2(df)
-        ida_summary = (
-            df.dropna(subset=["ida"])
-            .groupby("ano_referencia", as_index=False)["ida"]
-            .mean()
-            .rename(columns={"ida": "ida_media"})
-            .sort_values("ano_referencia")
+        render_q2(df)
+        render_exec_note(
+            message=(
+                "Ponto positivo\n"
+                "O valor de 2024 (6,35) ainda supera 2022 (6,10), o programa não zerou o ganho, apenas não o manteve.\n\n"
+                "Sinal de alerta\n"
+                "A inflexão em 2023 sugere intervenção pontual sem mecanismo de manutenção. O programa teve um pico de "
+                "efetividade que não se repetiu.\n\n"
+                "Risco estratégico\n"
+                "Se o IDA continuar recuando em 2025, o efeito sobre o INDE será direto e proporcional, dado o peso dessa "
+                "correlação, uma queda sustentada compromete o indicador global."
+            ),
+            implication=(
+                "Prioridade imediata: diagnosticar o que sustentou o pico de 2023 e o que mudou em 2024. Desagregar o IDA "
+                "por disciplina (Matemática, Português, Inglês) e por fase para identificar onde ocorreu a queda. O "
+                "contraste com o IAN também é revelador: como a adequação de nível melhora enquanto o desempenho "
+                "acadêmico piora?"
+            ),
+            base_visual_text="Gráfico 7",
         )
-        if len(ida_summary) >= 2:
-            delta = ida_summary.iloc[-1]["ida_media"] - ida_summary.iloc[0]["ida_media"]
-            trend = "melhora líquida" if delta > 0 else "queda líquida"
-            render_exec_note(
-                message=f"Variação acumulada no período: {delta:+.2f} pontos de IDA, com {trend}.",
-                implication=(
-                    "A governança pedagógica precisa monitorar turmas/fases com oscilação para evitar regressão. "
-                    "Em termos operacionais, isso pede rotina de acompanhamento mensal e plano de correção rápida para turmas em queda."
-                ),
-                graph_refs=list(q2_refs.values()),
-            )
 
     with st.expander("Q3 - IEG x IDA e IPV", expanded=True):
         render_analysis_header(
@@ -1468,30 +1455,25 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             approach="Correlações anuais + dispersões com linha de tendência por ano.",
         )
         q3_refs = render_q3(df)
-        rows = []
-        for year, part in df.groupby("ano_referencia"):
-            sub = part[["ieg", "ida", "ipv"]].dropna()
-            if len(sub) < 10:
-                continue
-            rows.append(
-                {
-                    "ano": int(year),
-                    "ieg_ida": sub["ieg"].corr(sub["ida"], method="spearman"),
-                    "ieg_ipv": sub["ieg"].corr(sub["ipv"], method="spearman"),
-                }
-            )
-        corr_df = pd.DataFrame(rows)
-        if not corr_df.empty:
+        if q3_refs:
             render_exec_note(
                 message=(
-                    f"Correlação média IEG x IDA: {corr_df['ieg_ida'].mean():.2f}. "
-                    f"Correlação média IEG x IPV: {corr_df['ieg_ipv'].mean():.2f}."
+                    "Relação mais forte\n"
+                    "IDA x IPV (0,55-0,62) - desempenho e ponto de virada são os mais coesos. O IPV incorpora desempenho "
+                    "na sua avaliação longitudinal.\n\n"
+                    "Relação estável\n"
+                    "IEG x IPV (0,54-0,55) - engajamento observável e consistentemente relacionado ao julgamento qualitativo "
+                    "de virada. Essa correlação não caiu em 2024, ao contrário de IDA x IPV.\n\n"
+                    "Atenção ao par IDA x IPV\n"
+                    "Em 2022 era o mais forte (0,62), mas caiu para 0,55 e estabilizou. Pode indicar que o IPV passou a "
+                    "depender menos de notas e mais de outros fatores."
                 ),
                 implication=(
-                    "IEG pode ser usado como indicador de monitoramento contínuo para acionar suporte acadêmico. "
-                    "Quando o engajamento cai, a intervenção precoce tende a reduzir a probabilidade de queda posterior no desempenho."
+                    "Estabelecer um limiar de alerta no IEG, por exemplo, queda de 1 ponto em relação à média da turma "
+                    "nas últimas 3 semanas, que acione revisão de acompanhamento antes da avaliação formal. Um aluno com "
+                    "queda no IEG sinaliza risco simultâneo em desempenho e ponto de virada antes que qualquer nota formal caia."
                 ),
-                graph_refs=list(q3_refs.values()) if q3_refs else None,
+                base_visual_text="Gráfico 9",
             )
 
     with st.expander("Q4 - IAA: coerência com indicadores objetivos", expanded=True):
@@ -1500,20 +1482,26 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             importance="Desalinhamento pode gerar percepção incorreta de necessidade de apoio.",
             approach="Distribuição do desvio entre IAA e média de IDA/IEG com medida de super/subestimação.",
         )
-        q4_ref = render_q4(df)
-        coherence = df.dropna(subset=["iaa", "ida", "ieg"]).copy()
-        if not coherence.empty:
-            coherence["desvio"] = coherence["iaa"] - coherence[["ida", "ieg"]].mean(axis=1)
-            over = (coherence["desvio"] > 0.5).mean() * 100
-            under = (coherence["desvio"] < -0.5).mean() * 100
-            render_exec_note(
-                message=f"Superestimação relevante: {over:.1f}%. Subestimação relevante: {under:.1f}%.",
-                implication=(
-                    "IAA agrega contexto socioemocional, mas decisão operacional deve combinar sinais objetivos. "
-                    "Na prática, casos de desalinhamento pedem conversa pedagógica individual e checagem de evidências de aprendizagem."
-                ),
-                graph_refs=[q4_ref],
-            )
+        render_q4(df)
+        render_exec_note(
+            message=(
+                "Viés de superestimação dominante\n"
+                "61,8% dos alunos se avaliam acima de IDA + IEG, mas o IAA mede bem-estar e pertencimento, não nota. "
+                "Não é incoerência do aluno, é limitação da comparação direta entre os instrumentos.\n\n"
+                "Sinal mais crítico\n"
+                "Os 19,2% que subestimam são pedagogicamente mais preocupantes: alunos que performam bem mas se sentem "
+                "mal consigo mesmos. Esse grupo pode abandonar antes de atingir o ponto de virada por baixa autoestima acadêmica.\n\n"
+                "Peso limitado no INDE\n"
+                "IAA representa apenas 10% do INDE, o menor peso. Seu valor diagnóstico é maior do que seu impacto "
+                "quantitativo no índice."
+            ),
+            implication=(
+                "Cruzar o desvio negativo do IAA com o IPV para identificar alunos com bom desempenho mas baixa "
+                "autopercepção, e acionar acompanhamento socioemocional antes que o desengajamento se instale. A "
+                "prioridade são os subestimadores, não os superestimadores."
+            ),
+            base_visual_text="Gráfico 12",
+        )
 
     st.markdown("### Bloco 2 - Sinais antecedentes de risco")
     with st.expander("Q5 e Q6 - IPS/IPP: alerta antecipado e confirmação com IAN", expanded=True):
@@ -1523,29 +1511,26 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             approach="Análise longitudinal com eventos de queda no ano seguinte e matriz de coerência IPP x IAN.",
         )
         q5_q6_refs = render_q5_q6(df_long)
-        prior = df_long[df_long["ano_base"].isin([2022, 2023])].copy()
-        prior = prior.dropna(subset=["ida", "ida_prox", "ieg", "ieg_prox", "ips", "ipp", "ian", "ian_prox"])
-        if not prior.empty:
-            prior["queda_ida_relevante"] = (prior["delta_ida_prox"] <= -1.0).astype(int)
-            prior["ips_baixo"] = (prior["ips"] <= prior["ips"].quantile(0.25)).astype(int)
-            prior["ipp_baixo"] = (prior["ipp"] <= prior["ipp"].quantile(0.25)).astype(int)
-            base_rate = prior["queda_ida_relevante"].mean() * 100
-            high_risk = prior[(prior["ips_baixo"] == 1) & (prior["ipp_baixo"] == 1)]
-            high_rate = high_risk["queda_ida_relevante"].mean() * 100 if not high_risk.empty else np.nan
-            contradiction_rate = (
-                (((prior["ipp"] > 7) & (prior["ian"] <= 5)) | ((prior["ipp"] <= 7) & (prior["ian"] > 5))).mean() * 100
-            )
+        if q5_q6_refs:
             render_exec_note(
                 message=(
-                    f"Taxa base de queda relevante de IDA: {base_rate:.1f}%. "
-                    f"No perfil IPS baixo + IPP baixo: {high_rate:.1f}%. "
-                    f"Contradição entre IPP e IAN: {contradiction_rate:.1f}%."
+                    "Perfil crítico duplo\n"
+                    "IPS baixo + IPP baixo concentra as maiores probabilidades de queda em IDA (40,0%) e IEG (45,7%). "
+                    "Com pesos combinados de 30% no INDE (IPS 10% + IPP 10% + IEG 20%), esse perfil sinaliza risco de "
+                    "impacto sistêmico no índice global.\n\n"
+                    "Janela de intervenção\n"
+                    "Os 32,2% com IPP frágil mas IAN ainda sem defasagem alta têm a maior relação custo-benefício de "
+                    "intervenção: o dano ainda não é irreversível. O momento de agir é agora.\n\n"
+                    "IPP como protetor de IAN\n"
+                    "O perfil 'IPS baixo + IPP não baixo' tem queda de IAN de apenas 2,7%, a menor de todos. Suporte "
+                    "psicopedagógico adequado funciona como amortecedor do risco psicossocial."
                 ),
                 implication=(
-                    "IPS/IPP são bons sinais antecedentes, mas devem ser lidos junto ao histórico acadêmico. "
-                    "Isso permite priorizar preventivamente alunos com maior probabilidade de deterioração no ano seguinte."
+                    "Triagem em duas etapas: (1) identificar IPS baixo + IPP baixo para protocolo de intervenção integrada; "
+                    "(2) priorizar dentro desse grupo os 32,2% com IPP frágil mas IAN ainda sem defasagem, maior relação "
+                    "custo-benefício. Decisões baseadas em IPS ou IPP isoladamente perdem essa camada de precisão."
                 ),
-                graph_refs=list(q5_q6_refs.values()) if q5_q6_refs else None,
+                base_visual_text="Gráficos 13 e 14",
             )
 
     st.markdown("### Bloco 3 - Drivers e modelagem exploratória")
@@ -1559,15 +1544,25 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
         if q7_info is not None:
             render_exec_note(
                 message=(
-                    f"Principal driver: {q7_info['top_driver']} ({q7_info['top_importance']*100:.1f}%). "
-                    f"Top 3 drivers concentram {q7_info['top3_share']:.1f}% da explicação "
-                    f"(amostra: {q7_info['n']} registros)."
+                    "Driver dominante\n"
+                    "IPP (53,1%) - avaliação psicopedagógica é o fator mais preditivo. Pelo peso do IPP no INDE (10%), "
+                    "seu impacto sobre o IPV (20%) é desproporcional ao seu peso direto, opera como amplificador indireto.\n\n"
+                    "Segundo driver\n"
+                    "IEG (23,0%) - engajamento em tarefas registradas é o componente comportamental mais relevante. "
+                    "Combinado com IPP, os dois respondem por 76,1% da explicação do IPV.\n\n"
+                    "Terceiro driver\n"
+                    "IDA (13,4%) - desempenho acadêmico contribui, mas é o terceiro fator. Um aluno engajado e bem avaliado "
+                    "pedagogicamente pode estar em virada mesmo com IDA moderado.\n\n"
+                    "Irrelevante para IPV\n"
+                    "IAN (1,2%) - defasagem de nível praticamente não explica o ponto de virada."
                 ),
                 implication=(
-                    "Intervenções focadas nos drivers principais tendem a gerar maior ganho marginal no IPV. "
-                    "Em cenário de orçamento limitado, essa priorização aumenta eficiência e velocidade de impacto."
+                    "Para aumentar o IPV, priorizar nessa ordem: (1) qualidade do acompanhamento psicopedagógico, (2) "
+                    "engajamento consistente em tarefas registradas, (3) desempenho acadêmico como complemento. Em cenário "
+                    "de orçamento limitado, recursos em IPP e IEG geram retorno proporcionalmente maior no IPV, e nos 20% "
+                    "do INDE que esse indicador representa."
                 ),
-                graph_refs=[q7_info["grafico_ref"]],
+                base_visual_text="Gráfico 15",
             )
 
     with st.expander("Q8 - Combinações que explicam melhor o INDE", expanded=True):
@@ -1577,19 +1572,26 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             approach="Modelo de regressão com variáveis-chave e análise de perfis por faixas (baixo/intermediário/alto).",
         )
         q8_profiles, q8_ref = render_q8(df)
-        if isinstance(q8_profiles, pd.DataFrame) and not q8_profiles.empty:
-            top_profile = q8_profiles.iloc[0]
+        if isinstance(q8_profiles, pd.DataFrame) and not q8_profiles.empty and q8_ref is not None:
             render_exec_note(
                 message=(
-                    f"Melhor combinação observada: IDA={top_profile['ida_faixa']}, IEG={top_profile['ieg_faixa']}, "
-                    f"IPS={top_profile['ips_faixa']}, IPP={top_profile['ipp_faixa']}; "
-                    f"INDE médio={top_profile['media_inde']:.2f} (n={int(top_profile['alunos'])})."
+                    "Núcleo explicativo\n"
+                    "IDA (58,6%) + IEG (28,7%) = 87,3% da variação do INDE com apenas dois indicadores. Políticas que movem "
+                    "esses dois atuam sobre quase 9 em cada 10 pontos de variação no índice global.\n\n"
+                    "Refinamento de segundo nível\n"
+                    "IPS e IPP têm importância preditiva baixa para o INDE médio, mas alta para perfis de vulnerabilidade. "
+                    "São indicadores de triagem de risco, não de alavancagem de média.\n\n"
+                    "Tensão modelo x estrutura\n"
+                    "IDA vale 20% no cálculo formal, mas explica 58,6% da variação observada. IDA funciona como proxy: "
+                    "alunos com IDA alto tendem a ter IEG alto, IPV alto e melhores avaliações de IPP, o que amplifica o "
+                    "efeito real de IDA além do seu peso declarado."
                 ),
                 implication=(
-                    "INDE é multidimensional, com eixo dominante acadêmico + engajamento na maior parte dos perfis. "
-                    "Na prática, isso reforça que políticas exclusivamente acadêmicas perdem efetividade sem estratégia de engajamento."
+                    "Sequência correta: (1) estabilizar IDA + IEG para elevar o INDE médio da base, 87,3% da explicação com "
+                    "dois indicadores; (2) usar IPS + IPP como filtros de triagem preventiva para blindar perfis vulneráveis; "
+                    "(3) combinar tudo para elevar o teto de excelência nos casos já consolidados."
                 ),
-                graph_refs=[q8_ref] if q8_ref is not None else None,
+                base_visual_text="Gráfico 16",
             )
 
     with st.expander("Q9 - Baseline de previsão de risco de defasagem", expanded=True):
@@ -1600,17 +1602,53 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
         )
         q9_info = render_q9(df_long)
         if q9_info is not None:
+            render_graph_note(
+                analysis=(
+                    "Métrica | Valor | Interpretação\n"
+                    "ROC-AUC (teste) | 0,838 | Discriminação geral - acima do limiar 'bom' (>=0,80)\n"
+                    "PR-AUC (teste) | 0,771 | Precisão nos casos de risco - métrica operacional real\n"
+                    "Variável de maior peso | IPP (33,1%) | Consistente com análise de drivers do IPV\n"
+                    "Base modelada | 690 observações | Piso mínimo - expandir com anos anteriores do PEDE\n\n"
+                    "ROC-AUC de 0,838 significa que o modelo distingue corretamente alunos em risco em 83,8% dos pares "
+                    "comparados. Em bases desbalanceadas, onde alunos em risco são minoria, o ROC-AUC pode ser otimista. "
+                    "O PR-AUC de 0,771 é a métrica honesta: mede a precisão do modelo especificamente nos casos positivos, "
+                    "que tendem a ser minoria na base.\n\n"
+                    "ALERTA DE CALIBRAÇÃO: um modelo com bom AUC mas mal calibrado pode atribuir probabilidade de 70% a "
+                    "casos que na realidade têm 30% de chance. Para uso operacional em triagem, a calibração de "
+                    "probabilidade (Platt scaling ou isotonic regression) é etapa obrigatória antes da produção."
+                ),
+                practical_meaning=(
+                    "Um ROC-AUC de 0,838 em base de 690 observações é resultado expressivo para um modelo baseline, sem "
+                    "engenharia de features avançada, sem dados externos. Os indicadores do PEDE, mesmo sem transformações, "
+                    "já carregam sinal preditivo suficiente para construir uma fila de prioridade operacional. Identificar "
+                    "corretamente 8 em cada 10 alunos em risco antes da queda representa uma mudança de paradigma de "
+                    "reativo para preventivo."
+                ),
+                analysis_title="Desempenho do modelo baseline",
+            )
             render_exec_note(
                 message=(
-                    f"ROC-AUC={q9_info['roc_auc']:.3f} e PR-AUC={q9_info['pr_auc']:.3f}. "
-                    f"Variável de maior peso: {q9_info['top_feature']} "
-                    f"({q9_info['top_feature_importance']*100:.1f}%). "
-                    f"Base modelada: {q9_info['n']} observações."
+                    "Viabilidade confirmada\n"
+                    "ROC-AUC = 0,838 com apenas os indicadores existentes. Não é necessário coletar novos dados para "
+                    "construir um sistema de triagem funcional.\n\n"
+                    "IPP como âncora preditiva\n"
+                    "Com 33,1% de importância no modelo de risco e 53,1% no modelo do IPV, o IPP emerge consistentemente "
+                    "como o indicador mais preditivo do sistema. A qualidade e frequência da avaliação psicopedagógica "
+                    "impacta diretamente a capacidade do modelo de identificar risco.\n\n"
+                    "Limitação crítica da base\n"
+                    "690 observações é o piso mínimo. Com a série histórica completa (2020-2023), features de trajetória "
+                    "(Delta IDA, Delta IEG ano a ano) provavelmente elevariam o ROC-AUC para acima de 0,88.\n\n"
+                    "PR-AUC é a métrica que importa\n"
+                    "Em bases desbalanceadas, o ROC-AUC pode ser otimista. O PR-AUC de 0,771 é a métrica honesta para "
+                    "triagem com recursos limitados: mede o quanto o modelo é preciso quando aciona o alerta."
                 ),
                 implication=(
-                    "Há sinal preditivo útil para triagem inicial de risco, com espaço para calibração refinada. "
-                    "Isso viabiliza uma fila de prioridade para atendimento, reduzindo reação tardia aos casos críticos."
+                    "Três melhorias incrementais sem custo de coleta: (1) incluir features de trajetória longitudinal "
+                    "(Delta IDA, Delta IEG entre anos); (2) calibrar as probabilidades para uso operacional real; (3) "
+                    "expandir a base com anos anteriores do PEDE para aumentar a amostra de treino de 690 para "
+                    "potencialmente 2.000+ observações."
                 ),
+                base_visual_text="Sem base gráfica - métricas do modelo baseline (ROC-AUC e PR-AUC)",
             )
 
     with st.expander("Q10 - Efetividade por fase e coorte", expanded=True):
@@ -1620,33 +1658,88 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             approach="Comparação anual por fase e coorte, com foco em INDE e risco de defasagem.",
         )
         cohort_evolution, q10_refs = render_q10(df)
-        if isinstance(cohort_evolution, pd.DataFrame) and not cohort_evolution.empty:
-            end_year = cohort_evolution["ano_referencia"].max()
-            start_year = cohort_evolution["ano_referencia"].min()
-            end_view = cohort_evolution[cohort_evolution["ano_referencia"] == end_year].sort_values("media_inde", ascending=False)
-            best_phase = end_view.iloc[0]["pedra_inicial"]
-            best_inde = end_view.iloc[0]["media_inde"]
-
-            cohort_delta = (
-                cohort_evolution.groupby("pedra_inicial")
-                .apply(lambda x: x.sort_values("ano_referencia")["media_inde"].iloc[-1] - x.sort_values("ano_referencia")["media_inde"].iloc[0])
-                .dropna()
-            )
-            strongest_growth = cohort_delta.sort_values(ascending=False).index[0] if not cohort_delta.empty else "N/A"
-            strongest_growth_value = cohort_delta.max() if not cohort_delta.empty else np.nan
-
+        if isinstance(cohort_evolution, pd.DataFrame) and not cohort_evolution.empty and q10_refs:
             render_exec_note(
                 message=(
-                    f"Melhor patamar de INDE no ano final ({int(end_year)}): {best_phase} ({best_inde:.2f}). "
-                    f"Maior ganho entre {int(start_year)} e {int(end_year)}: "
-                    f"{strongest_growth} ({strongest_growth_value:+.2f})."
+                    "Impacto real e verificável\n"
+                    "Todas as faixas reduziram o percentual de alunos com defasagem alta, evidência de efetividade distribuída, "
+                    "não concentrada numa faixa.\n\n"
+                    "Programa de recuperação, não de excelência\n"
+                    "O maior ganho de INDE é da coorte Quartzo (+0,64). O Topázio perdeu (-0,12). O programa é mais efetivo "
+                    "em elevar os mais vulneráveis, coerência com a missão.\n\n"
+                    "Alerta: INDE alto com IAN baixo\n"
+                    "23,4% dos alunos Topázio têm defasagem alta. INDE elevado não garante adequação pedagógica, a gestão "
+                    "precisa conhecer essa limitação estrutural do instrumento.\n\n"
+                    "Gap estratégico: coorte Ágata\n"
+                    "A coorte Ágata cresceu apenas +0,03 em dois anos. Com INDE médio de 6,64 e limiar Ametista em 6,9, "
+                    "pequenos ganhos em IDA e IEG podem desbloquear migração de faixa para dezenas de alunos."
                 ),
                 implication=(
-                    "O impacto do programa é heterogêneo; a gestão deve combinar estratégia comum com ação por fase/coorte. "
-                    "Em termos práticos, isso significa definir plano base único e complementos específicos por maturidade da fase."
+                    "Três frentes: (1) manter intervenções que reduzem defasagem em Quartzo e Ágata; (2) criar estratégia "
+                    "específica para coorte Ágata próxima do limiar Ametista; (3) monitorar 'Topázio com IAN <= 5' para "
+                    "blindar sustentabilidade de longo prazo."
                 ),
-                graph_refs=list(q10_refs.values()),
+                base_visual_text="Gráficos 17, 18 e 19",
             )
-        else:
-            cohort_evolution = pd.DataFrame()
+
+    st.markdown("### Bloco 4 - Insights estratégicos")
+    with st.expander("Q11 - Insights estratégicos e criatividade", expanded=True):
+        render_analysis_header(
+            question=(
+                "Você pode adicionar mais insights e pontos de vista não abordados nas perguntas, utilizando a "
+                "criatividade e a análise dos dados para trazer sugestões para a Passos Mágicos?"
+            ),
+            importance="Enriquecer a análise com perspectivas transversais não cobertas pelas questões anteriores.",
+            approach="Síntese cruzada de todos os blocos analisados e raciocínio estratégico sobre o programa.",
+        )
+        render_graph_note(
+            analysis=(
+                "1. Ciclo virtuoso oculto: alerta semanal via IEG\n"
+                "O IEG é mensurável semanalmente, notas e IDA só aparecem em avaliações formais. Proposta: calcular a "
+                "variação do engajamento individual em relação à média da turma nas últimas 3 semanas. Queda de 1+ ponto "
+                "dispara notificação para o educador responsável, antes que qualquer nota caia. Custo de implementação: "
+                "zero coleta adicional, apenas processamento dos dados já existentes. Sinal semanal: IEG -> Sinal "
+                "bimestral: IDA -> Sinal anual: INDE.\n\n"
+                "2. A janela de ouro: alunos entre faixas Pedra\n"
+                "O maior retorno marginal está nos alunos próximos dos limiares de transição. Um aluno com INDE 6,70 "
+                "precisa de apenas +0,20 para cruzar para Ametista (6,9). Com IDA pesando 20% no INDE, uma melhora de "
+                "1 ponto nas três notas eleva o INDE em 0,20, suficiente para migrar de faixa. Proposta: criar lista de "
+                "'alunos de limiar' com INDE entre -0,3 e 0 do próximo threshold, e priorizar para reforço acadêmico "
+                "pontual. Gestão de mobilidade, não de média.\n\n"
+                "3. O paradoxo do avaliador: IPP e IPV são a mesma voz\n"
+                "IPP (10% do INDE) e IPV (20% do INDE) são avaliados pela mesma equipe, juntos valem 30% do INDE. O "
+                "Random Forest mostrou que IPP explica 53,1% do IPV, em parte porque é o mesmo avaliador respondendo "
+                "sobre o mesmo aluno. Isso cria inflação artificial de 30% do índice com fonte única. Proposta: "
+                "introduzir avaliadores distintos para IPP e IPV, ou aplicar os instrumentos com intervalo mínimo de 2 "
+                "semanas. Criar checklist de evidências observáveis para ancoragem do IPV reduz dependência da impressão subjetiva.\n\n"
+                "4. Topázio com defasagem: os invisíveis do índice global\n"
+                "23,4% dos alunos Topázio têm IAN <= 5. São excelentes no índice, mas com defasagem estrutural que pode "
+                "comprometer a trajetória fora da Associação (vestibular, ENEM, mercado de trabalho). Proposta: criar o "
+                "perfil 'Topázio com defasagem' como categoria de monitoramento específica. A intervenção não é de "
+                "emergência (o INDE está alto), mas de sustentabilidade: a defasagem de nível precisa ser trabalhada "
+                "antes que o aluno transite para ambientes onde o suporte da Associação não estará disponível.\n\n"
+                "5. IAA como termômetro de pertencimento\n"
+                "IAA alto com IDA baixo não é superestimação, é evidência de que o programa criou pertencimento antes de "
+                "gerar desempenho. A sequência emocional precede a sequência acadêmica, isso é pedagogicamente saudável e "
+                "estrategicamente valioso. Esses alunos já confiam na Associação, já se sentem seguros: falta converter "
+                "esse pertencimento em desempenho. São os casos de maior alavancagem afetiva disponível para intervenção acadêmica.\n\n"
+                "6. O modelo preditivo como produto operacional\n"
+                "O baseline (ROC-AUC = 0,838) já funciona bem o suficiente para triagem. O gap é de implementação, não de "
+                "qualidade técnica. Proposta: painel de triagem preventiva simples, os 20% de alunos de maior probabilidade "
+                "de risco, com indicadores-chave e driver principal de risco para cada um (IPP frágil? IEG em queda? IDA "
+                "abaixo da média da fase?). Atualizado a cada ciclo avaliativo. Custo: zero coleta adicional."
+            ),
+            practical_meaning=(
+                "A Passos Mágicos opera um programa de recuperação de trajetória, não de aceleração de excelência. Os "
+                "dados mostram isso com clareza: o maior ganho de INDE é da coorte Quartzo (+0,64), a maior redução de "
+                "defasagem é nas faixas mais baixas, e o programa tem dificuldade em manter os melhores no topo. Isso não "
+                "é fraqueza, é coerência com a missão. Mas tem uma implicação estratégica direta: as métricas de sucesso "
+                "devem medir mobilidade de faixa e redução de defasagem, não INDE médio.\n\n"
+                "PROPOSTA FINAL: adotar a TAXA DE MIGRAÇÃO DE FAIXA PEDRA como KPI primário, percentual de alunos que "
+                "sobem pelo menos uma faixa por ciclo anual. Esse indicador captura o que o programa realmente faz bem, "
+                "torna visível o impacto que as médias escondem, e orienta alocação de recursos para onde o retorno é mais alto."
+            ),
+            analysis_title="Insights estratégicos",
+            practical_title="Síntese estratégica final",
+        )
 
