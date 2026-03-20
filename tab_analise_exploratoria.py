@@ -101,6 +101,139 @@ def show_caption(text: str) -> None:
     st.caption(expand_abbreviations(text))
 
 
+def inject_eda_report_theme() -> None:
+    st.markdown(
+        """
+        <style>
+        .eda-context {
+            background: #FDF7EE;
+            border: 1px solid #FAC775;
+            border-radius: 12px;
+            padding: 1rem 1.1rem;
+            margin: 0.35rem 0 1rem 0;
+            color: #3D3D3A;
+            line-height: 1.58;
+        }
+        .eda-context strong {
+            color: #85500B;
+            font-size: 0.94rem;
+            letter-spacing: 0.01em;
+        }
+        .eda-context ul {
+            margin: 0.55rem 0 0 1.1rem;
+            padding: 0;
+        }
+        .eda-context li {
+            margin-bottom: 0.2rem;
+        }
+        .eda-header-question {
+            color: #1A1A1A;
+            font-size: 0.94rem;
+            margin: 0.2rem 0 0.25rem 0;
+            line-height: 1.5;
+        }
+        .eda-header-meta {
+            color: #3D3D3A;
+            font-size: 0.88rem;
+            line-height: 1.52;
+            margin-bottom: 0.22rem;
+        }
+        .eda-header-label {
+            color: #3D3D3A;
+            font-weight: 700;
+        }
+        .eda-header-rule {
+            height: 1px;
+            background: #D3D1C7;
+            margin: 0.45rem 0 0.6rem 0;
+        }
+        .eda-note {
+            border-radius: 12px;
+            padding: 0.95rem 1.05rem;
+            margin: 0.58rem 0 1rem 0;
+            line-height: 1.58;
+            color: #3D3D3A;
+            border: 1px solid #D3D1C7;
+        }
+        .eda-note--analysis {
+            background: #EBF7F2;
+            border-color: #9FE1CB;
+            box-shadow: inset 0 0 0 1px rgba(159, 225, 203, 0.35);
+        }
+        .eda-note--conclusion {
+            background: #FDF7EE;
+            border-color: #FAC775;
+            box-shadow: inset 0 0 0 1px rgba(250, 199, 117, 0.28);
+        }
+        .eda-note strong {
+            color: #0F6E56;
+            font-size: 0.92rem;
+            letter-spacing: 0.01em;
+        }
+        .eda-note--conclusion strong {
+            color: #85500B;
+        }
+        .eda-note-divider {
+            border-top: 1px solid #D3D1C7;
+            margin: 0.52rem 0 0.62rem 0;
+        }
+        .eda-note-ref {
+            color: #73726C;
+            font-size: 0.79rem;
+            margin-top: 0.58rem;
+            line-height: 1.42;
+        }
+        .eda-note-ref .eda-note-ref-label {
+            color: #73726C;
+            font-weight: 700;
+        }
+        .eda-inline-table-wrap {
+            width: 100%;
+            overflow-x: auto;
+            margin: 0.48rem 0 0.54rem 0;
+        }
+        .eda-inline-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.83rem;
+            color: #3D3D3A;
+            background: #FFFFFF;
+            border: 1px solid #D3D1C7;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .eda-inline-table th {
+            text-align: left;
+            font-weight: 700;
+            color: #264653;
+            background: #F3F5F4;
+            border-bottom: 1px solid #D3D1C7;
+            padding: 0.34rem 0.46rem;
+            white-space: nowrap;
+        }
+        .eda-inline-table td {
+            padding: 0.33rem 0.46rem;
+            border-top: 1px solid #ECEBE4;
+            vertical-align: top;
+            white-space: nowrap;
+        }
+        .eda-inline-table tr:first-child td {
+            border-top: none;
+        }
+        .eda-block-title {
+            color: #73726C;
+            font-size: 0.8rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            margin: 0.1rem 0 0.55rem 0;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 
 def reset_graph_counter() -> None:
     global _graph_counter
@@ -159,15 +292,109 @@ def format_graph_refs(graph_refs: list[int] | None) -> str:
 
 
 def render_analysis_header(question: str, importance: str, approach: str) -> None:
-    st.markdown(f"**Pergunta orientadora:** {expand_abbreviations(question)}")
+    q_text = html.escape(str(expand_abbreviations(question)))
+    importance_text = html.escape(str(expand_abbreviations(importance)))
+    approach_text = html.escape(str(expand_abbreviations(approach)))
+    st.markdown(
+        f"""
+        <div class="eda-header-question">
+            <span class="eda-header-label">Pergunta orientadora:</span> {q_text}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     c1, c2 = st.columns(2)
-    c1.markdown(f"**Por que importa:** {expand_abbreviations(importance)}")
-    c2.markdown(f"**Como foi analisado:** {expand_abbreviations(approach)}")
+    c1.markdown(
+        f"""
+        <div class="eda-header-meta">
+            <span class="eda-header-label">Por que importa:</span> {importance_text}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    c2.markdown(
+        f"""
+        <div class="eda-header-meta">
+            <span class="eda-header-label">Como foi analisado:</span> {approach_text}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="eda-header-rule"></div>', unsafe_allow_html=True)
 
 
 def format_card_text(text: str, *, expand_text: bool = False) -> str:
     raw_text = expand_abbreviations(text) if expand_text else text
-    return html.escape(raw_text).replace("\n", "<br>")
+    return _format_text_with_inline_tables(raw_text)
+
+
+def _is_tabular_line(line: str) -> bool:
+    return line.count("|") >= 2 and any(cell.strip() for cell in line.split("|"))
+
+
+def _parse_table_rows(table_lines: list[str]) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for line in table_lines:
+        cells = [cell.strip() for cell in line.split("|")]
+        if cells and cells[0] == "":
+            cells = cells[1:]
+        if cells and cells[-1] == "":
+            cells = cells[:-1]
+        if len(cells) >= 2:
+            rows.append(cells)
+    return rows
+
+
+def _render_inline_table(rows: list[list[str]]) -> str:
+    max_cols = max(len(row) for row in rows)
+    normalized_rows = [row + [""] * (max_cols - len(row)) for row in rows]
+
+    header_cells = "".join(f"<th>{html.escape(cell)}</th>" for cell in normalized_rows[0])
+    body_rows = []
+    for row in normalized_rows[1:]:
+        cells_html = "".join(f"<td>{html.escape(cell)}</td>" for cell in row)
+        body_rows.append(f"<tr>{cells_html}</tr>")
+
+    tbody_html = f"<tbody>{''.join(body_rows)}</tbody>" if body_rows else ""
+    return (
+        '<div class="eda-inline-table-wrap">'
+        f'<table class="eda-inline-table"><thead><tr>{header_cells}</tr></thead>{tbody_html}</table>'
+        "</div>"
+    )
+
+
+def _format_text_with_inline_tables(raw_text: str) -> str:
+    lines = raw_text.splitlines()
+    output_parts: list[str] = []
+    text_buffer: list[str] = []
+
+    def flush_text_buffer() -> None:
+        if not text_buffer:
+            return
+        escaped = html.escape("\n".join(text_buffer)).replace("\n", "<br>")
+        output_parts.append(escaped)
+        text_buffer.clear()
+
+    i = 0
+    while i < len(lines):
+        if _is_tabular_line(lines[i]):
+            j = i
+            while j < len(lines) and _is_tabular_line(lines[j]):
+                j += 1
+            table_rows = _parse_table_rows(lines[i:j])
+            if len(table_rows) >= 2:
+                flush_text_buffer()
+                output_parts.append(_render_inline_table(table_rows))
+            else:
+                text_buffer.extend(lines[i:j])
+            i = j
+            continue
+
+        text_buffer.append(lines[i])
+        i += 1
+
+    flush_text_buffer()
+    return "".join(output_parts)
 
 
 def render_exec_note(
@@ -181,13 +408,16 @@ def render_exec_note(
     refs_text = base_visual_text or format_graph_refs(graph_refs)
     st.markdown(
         f"""
-        <div class="eda-note">
+        <div class="eda-note eda-note--conclusion">
         <strong>Conclusão</strong><br>
-        {format_card_text(message, expand_text=expand_text)}<br><br>
+        {format_card_text(message, expand_text=expand_text)}
+        <div class="eda-note-divider"></div>
         <strong>Implicação prática</strong><br>
-        {format_card_text(implication, expand_text=expand_text)}<br><br>
-        <strong>Base visual</strong><br>
-        {format_card_text(refs_text)}
+        {format_card_text(implication, expand_text=expand_text)}
+        <div class="eda-note-ref">
+            <span class="eda-note-ref-label">Base visual</span><br>
+            {format_card_text(refs_text)}
+        </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -204,9 +434,10 @@ def render_graph_note(
 ) -> None:
     st.markdown(
         f"""
-        <div class="eda-note">
+        <div class="eda-note eda-note--analysis">
         <strong>{format_card_text(analysis_title)}</strong><br>
-        {format_card_text(analysis, expand_text=expand_text)}<br><br>
+        {format_card_text(analysis, expand_text=expand_text)}
+        <div class="eda-note-divider"></div>
         <strong>{format_card_text(practical_title)}</strong><br>
         {format_card_text(practical_meaning, expand_text=expand_text)}
         </div>
@@ -1343,6 +1574,7 @@ def render_q10(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
 
 def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> None:
     reset_graph_counter()
+    inject_eda_report_theme()
     years = sorted([int(y) for y in df["ano_referencia"].dropna().unique().tolist()])
     # c1, c2, c3 = st.columns(3)
     # c1.metric("Registros analisados", f"{len(df):,}".replace(",", "."))
@@ -1351,7 +1583,7 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
 
     st.markdown(
         f"""
-        <div class="eda-note">
+        <div class="eda-context">
         <strong>Contexto</strong><br>
         Esta seção apresenta uma análise exploratória sobre a evolução dos alunos
         atendidos pelo programa, correlacionando métricas de desempenho acadêmico, engajamento e fatores socioemocionais.
@@ -1367,7 +1599,7 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
         unsafe_allow_html=True,
     )
 
-    st.markdown("### Bloco 1 - Diagnóstico de desempenho")
+    st.markdown('<div class="eda-block-title">Bloco 1 - Diagnóstico de desempenho</div>', unsafe_allow_html=True)
     with st.expander("Relações estruturais entre indicadores", expanded=True):
         render_analysis_header(
             question="Quais indicadores caminham junto com o INDE?",
@@ -1503,7 +1735,7 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
             base_visual_text="Gráfico 12",
         )
 
-    st.markdown("### Bloco 2 - Sinais antecedentes de risco")
+    st.markdown('<div class="eda-block-title">Bloco 2 - Sinais antecedentes de risco</div>', unsafe_allow_html=True)
     with st.expander("Q5 e Q6 - IPS/IPP: alerta antecipado e confirmação com IAN", expanded=True):
         render_analysis_header(
             question="IPS e IPP antecipam quedas futuras e confirmam risco pedagógico?",
@@ -1533,7 +1765,7 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
                 base_visual_text="Gráficos 13 e 14",
             )
 
-    st.markdown("### Bloco 3 - Drivers e modelagem exploratória")
+    st.markdown('<div class="eda-block-title">Bloco 3 - Drivers e modelagem exploratória</div>', unsafe_allow_html=True)
     with st.expander("Q7 - O que mais explica IPV", expanded=True):
         render_analysis_header(
             question="Quais variáveis mais influenciam o IPV?",
@@ -1682,7 +1914,7 @@ def render_analise_exploratoria_tab(df: pd.DataFrame, df_long: pd.DataFrame) -> 
                 base_visual_text="Gráficos 17, 18 e 19",
             )
 
-    st.markdown("### Bloco 4 - Insights estratégicos")
+    st.markdown('<div class="eda-block-title">Bloco 4 - Insights estratégicos</div>', unsafe_allow_html=True)
     with st.expander("Q11 - Insights estratégicos e criatividade", expanded=True):
         render_analysis_header(
             question=(
