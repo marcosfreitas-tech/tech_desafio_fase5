@@ -18,6 +18,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+from sklearn.isotonic import IsotonicRegression
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -437,6 +438,41 @@ def _risk_level(probability: float) -> str:
     if value <= 50:
         return "Média"
     return "Alta"
+
+
+def _predict_probability(bundle: dict, values: dict[str, float | str]) -> float:
+    input_row = pd.DataFrame([{feature: values.get(feature) for feature in bundle["feature_columns"]}])
+    raw_probability = float(bundle["pipeline"].predict_proba(input_row)[:, 1][0])
+
+    note_cols = ("nota_matematica", "nota_portugues", "nota_ingles")
+    if not all(_has_feature(bundle, col) for col in note_cols):
+        return raw_probability
+
+    notes = np.array([float(values.get(col, 0.0)) for col in note_cols], dtype=float)
+    if np.isnan(notes).any():
+        return raw_probability
+
+    mean_note = float(np.mean(notes))
+    offsets = notes - mean_note
+    lower_bound = float(max(-offsets))
+    upper_bound = float(min(10.0 - offsets))
+    if upper_bound <= lower_bound:
+        return raw_probability
+
+    note_grid = np.linspace(lower_bound, upper_bound, 31)
+    probability_grid: list[float] = []
+    for mean_candidate in note_grid:
+        scenario = dict(values)
+        for idx, col in enumerate(note_cols):
+            scenario[col] = float(np.clip(mean_candidate + offsets[idx], 0.0, 10.0))
+        _sync_derived_features(bundle, scenario)
+        scenario_row = pd.DataFrame([{feature: scenario.get(feature) for feature in bundle["feature_columns"]}])
+        probability_grid.append(float(bundle["pipeline"].predict_proba(scenario_row)[:, 1][0]))
+
+    iso = IsotonicRegression(increasing=False, out_of_bounds="clip")
+    iso.fit(note_grid, probability_grid)
+    adjusted_probability = float(iso.predict([mean_note])[0])
+    return float(np.clip(adjusted_probability, 0.0, 1.0))
 
 
 def _risk_message(level: str) -> str:
@@ -1295,10 +1331,10 @@ def render_modelo_preditivo_tab(df: pd.DataFrame) -> None:
         )
 
     _sync_derived_features(bundle, values)
-    input_row = pd.DataFrame([{feature: values.get(feature) for feature in bundle["feature_columns"]}])
-    probability = float(bundle["pipeline"].predict_proba(input_row)[:, 1][0])
+    probability = _predict_probability(bundle, values)
     level = _risk_level(probability)
     dimension_message = _dimension_priority_message(values)
 
     _render_probability_gauge(probability)
     _render_result_card(probability, level, dimension_message)
+
