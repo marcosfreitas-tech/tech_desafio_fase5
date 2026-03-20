@@ -25,7 +25,6 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 RANDOM_STATE = 42
 N_FOLDS = 5
 TARGET_IAN_THRESHOLD = 5.0
-TARGET_IDA_THRESHOLD = 6.0
 RECALL_OBJECTIVE = 0.80
 THRESHOLD_GRID = np.round(np.linspace(0.10, 0.90, 33), 3)
 
@@ -253,7 +252,6 @@ def _prepare_model_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     model_df["target_disponivel"] = model_df["ian_prox"].notna() & model_df["ida_prox"].notna()
     model_df["risco_defasagem_t1"] = (
         (model_df["ian_prox"] <= TARGET_IAN_THRESHOLD)
-        | (model_df["ida_prox"] <= TARGET_IDA_THRESHOLD)
         | (model_df["delta_ian_prox"] <= -1.0)
     ).astype("Int64")
 
@@ -421,7 +419,7 @@ def train_random_forest_bundle(df: pd.DataFrame) -> dict:
         "category_options": category_options,
         "numeric_limits": numeric_limits,
         "feature_importance": importance_df.to_dict(orient="records"),
-        "target_rule": "Risco = 1 se (IAN t+1 <= 5,0) ou (IDA t+1 <= 6,0) ou (queda de IAN t+1 <= -1,0).",
+        "target_rule": "Risco = 1 se (IAN t+1 <= 5,0) ou (queda de IAN >= 1 ponto no próximo ciclo). Predição antecipada — usa dados do ciclo atual para estimar risco no próximo.",
         "training_info": {
             "train_rows": int(len(train_df)),
             "test_rows": int(len(test_df)),
