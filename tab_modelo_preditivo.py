@@ -552,10 +552,6 @@ def load_model_bundle(df: pd.DataFrame, model_bundle_path: Path, model_bundle_mt
         "threshold_grid_max": threshold_grid_max,
     }
 
-    popover_info = bundle.get("popover_info")
-    if not isinstance(popover_info, dict):
-        popover_info = {}
-
     return {
         "pipeline": pipeline,
         "threshold": threshold,
@@ -570,7 +566,6 @@ def load_model_bundle(df: pd.DataFrame, model_bundle_path: Path, model_bundle_mt
         "target_rule": target_rule,
         "model_info": model_info,
         "training_info": _normalize_training_info(bundle),
-        "popover_info": popover_info,
         "model_source_path": str(model_bundle_path),
         "model_name": str(bundle.get("model_name", model_info.get("algorithm", "Modelo"))),
     }
@@ -1047,145 +1042,6 @@ def _render_probability_gauge(probability: float) -> None:
     st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
 
-def _render_technical_popover(bundle: dict) -> None:
-    info = bundle["training_info"]
-    metrics = info["metrics_test"]
-    model_info = bundle.get("model_info", {})
-    model_hyperparameters = model_info.get("hyperparameters", {})
-    popover_info = bundle.get("popover_info", {})
-    train_label = str(popover_info.get("train_label", "Treino (2022)"))
-    test_label = str(popover_info.get("test_label", "Teste temporal (2023)"))
-    threshold_note = popover_info.get("threshold_selection_criterion")
-    model_selection_note = popover_info.get("model_selection_criterion")
-
-    with st.popover("ℹ️", help="Detalhes técnicos do modelo"):
-        def _format_key_label(raw_key: str) -> str:
-            label = str(raw_key).replace("_", " ").strip().title()
-            replacements = {
-                "Ian": "IAN",
-                "Ida": "IDA",
-                "Ieg": "IEG",
-                "Iaa": "IAA",
-                "Ips": "IPS",
-                "Ipp": "IPP",
-                "Ipv": "IPV",
-                "Pr": "PR",
-                "Roc": "ROC",
-            }
-            for old, new in replacements.items():
-                label = label.replace(old, new)
-            return label
-
-        def _format_value(value: object) -> str:
-            if value is None:
-                return "-"
-            if isinstance(value, bool):
-                return "Sim" if value else "Não"
-            if isinstance(value, (int, np.integer)):
-                return f"{int(value)}"
-            if isinstance(value, (float, np.floating)):
-                if np.isnan(value):
-                    return "-"
-                if float(value).is_integer():
-                    return f"{int(value)}"
-                return f"{float(value):.4g}"
-            return str(value)
-
-        st.markdown("**Detalhes técnicos do modelo**")
-        st.caption("Seção de apoio para leitura analítica. O uso operacional está no formulário principal.")
-
-        st.markdown("**Regra de definição do risco**")
-        target_rule = bundle.get("target_rule")
-        if isinstance(target_rule, dict):
-            description = target_rule.get("description")
-            if description:
-                st.write(str(description))
-
-            threshold_items = []
-            for key, value in target_rule.items():
-                if str(key).lower() == "description":
-                    continue
-                if "threshold" in str(key).lower():
-                    threshold_items.append((str(key), value))
-
-            if threshold_items:
-                cols = st.columns(min(3, len(threshold_items)))
-                for idx, (key, value) in enumerate(threshold_items):
-                    with cols[idx % len(cols)]:
-                        st.metric(_format_key_label(key), _format_value(value))
-
-            for key, value in target_rule.items():
-                if str(key).lower() == "description" or (isinstance(key, str) and "threshold" in key.lower()):
-                    continue
-                st.caption(f"{_format_key_label(str(key))}: {_format_value(value)}")
-        else:
-            st.write(str(target_rule))
-
-        st.markdown("**Amostras usadas no treinamento**")
-        st.write(f"{train_label}: {info['train_rows']:,}".replace(",", "."))
-        st.write(f"{test_label}: {info['test_rows']:,}".replace(",", "."))
-
-        st.markdown("**Parâmetros do modelo**")
-        model_algorithm = str(model_info.get("algorithm", bundle.get("model_name", "Modelo")))
-        c_model, c_threshold = st.columns(2)
-        with c_model:
-            st.metric("Algoritmo", model_algorithm)
-        with c_threshold:
-            st.metric("Threshold final", f"{bundle['threshold']:.3f}")
-
-        if model_hyperparameters:
-            preferred_order = [
-                "n_estimators",
-                "max_depth",
-                "learning_rate",
-                "min_samples_split",
-                "min_samples_leaf",
-                "subsample",
-                "colsample_bytree",
-                "max_features",
-                "class_weight",
-                "random_state",
-            ]
-            shown_keys: list[str] = [key for key in preferred_order if key in model_hyperparameters]
-            if not shown_keys:
-                shown_keys = list(model_hyperparameters.keys())[:8]
-
-            c_left, c_right = st.columns(2)
-            for idx, key in enumerate(shown_keys):
-                col = c_left if idx % 2 == 0 else c_right
-                with col:
-                    st.metric(_format_key_label(key), _format_value(model_hyperparameters.get(key)))
-
-        if threshold_note:
-            st.caption(str(threshold_note))
-        elif model_info:
-            st.caption(
-                f"Threshold escolhido via OOF com objetivo de recall >= {model_info.get('recall_objective', RECALL_OBJECTIVE):.2f}, "
-                f"avaliando grade de {model_info.get('threshold_grid_min', float(np.min(THRESHOLD_GRID))):.2f} "
-                f"a {model_info.get('threshold_grid_max', float(np.max(THRESHOLD_GRID))):.2f}."
-            )
-        if model_selection_note:
-            st.caption(str(model_selection_note))
-
-        st.markdown("**Desempenho no teste temporal (2023)**")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.metric("Recall", f"{metrics['recall'] * 100:.1f}%")
-            st.caption("Sensibilidade: proporção dos casos de risco que o modelo consegue identificar.")
-        with c2:
-            st.metric("AUC-ROC", f"{metrics['roc_auc']:.3f}")
-            st.caption("Capacidade de separar risco vs. não risco em todos os limiares (quanto maior, melhor).")
-        c3, c4 = st.columns(2)
-        with c3:
-            st.metric("Precisão", f"{metrics['precision'] * 100:.1f}%")
-            st.caption("Entre os casos marcados como risco, quantos realmente eram risco.")
-        with c4:
-            st.metric("F1-score", f"{metrics['f1'] * 100:.1f}%")
-            st.caption("Média harmônica entre Precisão e Recall: equilíbrio entre detectar e errar menos.")
-
-        _render_feature_importance(bundle)
-
-
 def render_modelo_preditivo_tab(df: pd.DataFrame) -> None:
     try:
         model_bundle_path = _resolve_model_bundle_path()
@@ -1199,16 +1055,12 @@ def render_modelo_preditivo_tab(df: pd.DataFrame) -> None:
         st.stop()
         return
 
-    header_col, info_col = st.columns([0.92, 0.08])
-    with header_col:
-        st.subheader("Probabilidade de risco de defasagem")
-        st.markdown(
-            """
-            Preencha os dados do(a) estudante para estimar a chance de entrada em defasagem no próximo ciclo.
-            """
-        )
-    with info_col:
-        _render_technical_popover(bundle)
+    st.subheader("Probabilidade de risco de defasagem")
+    st.markdown(
+        """
+        Preencha os dados do(a) estudante para estimar a chance de entrada em defasagem no proximo ciclo.
+        """
+    )
 
     values: dict[str, float | str] = {
         feature: bundle["default_inputs"].get(feature) for feature in bundle["feature_columns"]
