@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import pickle
 import re
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
     accuracy_score,
@@ -28,6 +29,11 @@ N_FOLDS = 5
 TARGET_IAN_THRESHOLD = 5.0
 RECALL_OBJECTIVE = 0.80
 THRESHOLD_GRID = np.round(np.linspace(0.10, 0.90, 33), 3)
+PROJECT_ROOT = Path(__file__).resolve().parent
+MODEL_BUNDLE_CANDIDATES = (
+    PROJECT_ROOT / "models" / "modelo_risco_defasagem.pkl",
+    PROJECT_ROOT / "artifacts" / "modelo_risco_defasagem.pkl",
+)
 
 NUMERIC_FEATURES_ALL = [
     "idade",
@@ -252,8 +258,7 @@ def _prepare_model_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     model_df["target_disponivel"] = model_df["ian_prox"].notna() & model_df["ida_prox"].notna()
     model_df["risco_defasagem_t1"] = (
-        (model_df["ian_prox"] <= TARGET_IAN_THRESHOLD)
-        | (model_df["delta_ian_prox"] <= -1.0)
+        model_df["ian_prox"] <= TARGET_IAN_THRESHOLD
     ).astype("Int64")
 
     labeled_df = model_df[(model_df["target_disponivel"]) & (model_df["ano_base"].isin([2022, 2023]))].copy()
@@ -273,121 +278,30 @@ def _feature_name_to_original(feature_name: str, categorical_cols: list[str]) ->
     return feature_name
 
 
-@st.cache_resource(show_spinner=False)
-def train_random_forest_bundle(df: pd.DataFrame) -> dict:
-    labeled_df = _prepare_model_dataframe(df)
-    if labeled_df.empty:
-        raise ValueError("Base rotulada vazia após o preparo dos dados.")
-
-    for col in NUMERIC_FEATURES_ALL + CATEGORICAL_FEATURES_ALL:
-        if col not in labeled_df.columns:
-            labeled_df[col] = np.nan
-
-    train_df = labeled_df[labeled_df["ano_base"] == 2022].copy()
-    test_df = labeled_df[labeled_df["ano_base"] == 2023].copy()
-    if train_df.empty or test_df.empty:
-        raise ValueError("Split temporal inválido: é necessário ter dados de 2022 e 2023.")
-
-    numeric_features: list[str] = []
-    for col in NUMERIC_FEATURES_ALL:
-        observed_ratio = train_df[col].notna().mean()
-        if observed_ratio >= NUMERIC_MIN_OBS_RATIO:
-            numeric_features.append(col)
-
-    categorical_features: list[str] = []
-    for col in CATEGORICAL_FEATURES_ALL:
-        observed_ratio = train_df[col].notna().mean()
-        unique_values = train_df[col].dropna().astype(str).nunique()
-        if observed_ratio >= CATEGORICAL_MIN_OBS_RATIO and unique_values >= MIN_CATEGORICAL_UNIQUE:
-            categorical_features.append(col)
-
-    feature_columns = numeric_features + categorical_features
-    if not feature_columns:
-        raise ValueError("Nenhuma variável elegível após filtragem de esparsidade.")
-
-    X_train = train_df[feature_columns].copy()
-    y_train = train_df["risco_defasagem_t1"].astype(int)
-    X_test = test_df[feature_columns].copy()
-    y_test = test_df["risco_defasagem_t1"].astype(int)
-
-    numeric_pipeline = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-        ]
-    )
-    categorical_pipeline = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("onehot", _safe_one_hot_encoder()),
-        ]
-    )
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ("num", numeric_pipeline, numeric_features),
-            ("cat", categorical_pipeline, categorical_features),
-        ],
-        remainder="drop",
+def _resolve_model_bundle_path() -> Path:
+    for candidate in MODEL_BUNDLE_CANDIDATES:
+        if candidate.exists():
+            return candidate
+    candidate_list = "\n".join([f"- {path}" for path in MODEL_BUNDLE_CANDIDATES])
+    raise FileNotFoundError(
+        "Artefato do modelo nao encontrado. Gere o modelo no notebook `scripts/2_Modelo_Preditivo.ipynb` "
+        "e salve o `modelo_risco_defasagem.pkl` em uma das pastas abaixo:\n"
+        f"{candidate_list}"
     )
 
-    model = RandomForestClassifier(
-        n_estimators=500,
-        max_depth=None,
-        min_samples_split=20,
-        min_samples_leaf=4,
-        max_features="sqrt",
-        class_weight="balanced_subsample",
-        random_state=RANDOM_STATE,
-        n_jobs=1,
-    )
-    model_hyperparameters = {
-        "n_estimators": 500,
-        "max_depth": None,
-        "min_samples_split": 20,
-        "min_samples_leaf": 4,
-        "max_features": "sqrt",
-        "class_weight": "balanced_subsample",
-        "random_state": RANDOM_STATE,
-    }
-    pipeline = Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
 
-    cv = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_STATE)
-    oof_prob = cross_val_predict(pipeline, X_train, y_train, cv=cv, method="predict_proba", n_jobs=1)[:, 1]
-
-    threshold_table = _evaluate_threshold_grid(y_train, oof_prob, THRESHOLD_GRID)
-    threshold = _choose_threshold(threshold_table, RECALL_OBJECTIVE)
-
-    pipeline.fit(X_train, y_train)
-    test_prob = pipeline.predict_proba(X_test)[:, 1]
-    test_pred = (test_prob >= threshold).astype(int)
-
-    metrics = {
-        "accuracy": float(accuracy_score(y_test, test_pred)),
-        "precision": float(precision_score(y_test, test_pred, zero_division=0)),
-        "recall": float(recall_score(y_test, test_pred, zero_division=0)),
-        "f1": float(f1_score(y_test, test_pred, zero_division=0)),
-        "roc_auc": float(roc_auc_score(y_test, test_prob)),
-        "pr_auc": float(average_precision_score(y_test, test_prob)),
-        "brier": float(brier_score_loss(y_test, test_prob)),
-    }
-
-    default_numeric = {
-        col: float(labeled_df[col].median()) if labeled_df[col].notna().any() else 0.0
-        for col in numeric_features
-    }
-    default_categorical = {}
-    for col in categorical_features:
-        mode_series = labeled_df[col].dropna().astype(str)
-        default_categorical[col] = mode_series.mode().iloc[0] if not mode_series.empty else "Não informado"
-
-    category_options = {col: sorted(labeled_df[col].dropna().astype(str).unique().tolist()) for col in categorical_features}
-
-    numeric_limits = {}
+def _build_numeric_limits(reference_df: pd.DataFrame, numeric_features: list[str]) -> dict[str, dict[str, float]]:
+    numeric_limits: dict[str, dict[str, float]] = {}
     for col in numeric_features:
-        valid = labeled_df[col].dropna()
+        if col in reference_df.columns:
+            valid = pd.to_numeric(reference_df[col], errors="coerce").dropna()
+        else:
+            valid = pd.Series(dtype="float64")
+
         if valid.empty:
             numeric_limits[col] = {"min": 0.0, "max": 10.0}
             continue
+
         q01 = float(valid.quantile(0.01))
         q99 = float(valid.quantile(0.99))
         low = min(q01, float(valid.min()))
@@ -395,57 +309,271 @@ def train_random_forest_bundle(df: pd.DataFrame) -> dict:
         if low == high:
             high = low + 1.0
         numeric_limits[col] = {"min": low, "max": high}
+    return numeric_limits
 
-    fitted_preprocessor = pipeline.named_steps["preprocessor"]
-    fitted_model = pipeline.named_steps["model"]
-    transformed_names = fitted_preprocessor.get_feature_names_out()
-    importances = np.asarray(fitted_model.feature_importances_, dtype=float)
-    importance_df = pd.DataFrame({"feature_transformada": transformed_names, "importancia": importances})
-    importance_df["feature_original"] = importance_df["feature_transformada"].apply(
-        lambda value: _feature_name_to_original(value, categorical_features)
-    )
-    importance_df = (
-        importance_df.groupby("feature_original", as_index=False)["importancia"]
-        .sum()
-        .sort_values("importancia", ascending=False)
-        .reset_index(drop=True)
-    )
-    total_imp = float(importance_df["importancia"].sum())
-    importance_df["importancia"] = importance_df["importancia"] / total_imp if total_imp > 0 else 0.0
 
-    risk_bands = {
-        "baixo_max": float(max(0.20, threshold - 0.15)),
-        "alto_min": float(threshold),
+def _normalize_feature_importance(bundle: dict) -> list[dict[str, float | str]]:
+    def _normalize_records(records: object) -> list[dict[str, float | str]]:
+        if not isinstance(records, list) or not records:
+            return []
+
+        importance_df = pd.DataFrame(records).copy()
+        if "feature_original" not in importance_df.columns:
+            if "feature" in importance_df.columns:
+                importance_df["feature_original"] = importance_df["feature"]
+            elif "variavel" in importance_df.columns:
+                importance_df["feature_original"] = importance_df["variavel"]
+
+        if "importancia" not in importance_df.columns:
+            if "importance" in importance_df.columns:
+                importance_df["importancia"] = pd.to_numeric(importance_df["importance"], errors="coerce")
+            elif "importancia_normalizada" in importance_df.columns:
+                importance_df["importancia"] = pd.to_numeric(importance_df["importancia_normalizada"], errors="coerce")
+
+        if "feature_original" not in importance_df.columns or "importancia" not in importance_df.columns:
+            return []
+
+        normalized = (
+            importance_df[["feature_original", "importancia"]]
+            .dropna(subset=["feature_original", "importancia"])
+            .copy()
+        )
+        if normalized.empty:
+            return []
+
+        normalized["feature_original"] = normalized["feature_original"].astype(str)
+        normalized["importancia"] = pd.to_numeric(normalized["importancia"], errors="coerce").fillna(0.0)
+        total = float(normalized["importancia"].sum())
+        if total > 0:
+            normalized["importancia"] = normalized["importancia"] / total
+        return normalized.to_dict(orient="records")
+
+    normalized = _normalize_records(bundle.get("feature_importance"))
+    if normalized:
+        return normalized
+    return _normalize_records(bundle.get("feature_importance_best_model"))
+
+
+def _normalize_training_info(bundle: dict) -> dict:
+    raw_info = bundle.get("training_info")
+    if not isinstance(raw_info, dict):
+        raw_info = {}
+
+    raw_metrics = raw_info.get("metrics_test")
+    if not isinstance(raw_metrics, dict):
+        raw_metrics = raw_info.get("best_model_test_metrics")
+    if not isinstance(raw_metrics, dict):
+        raw_metrics = {}
+
+    metric_keys = ["accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc", "brier"]
+    normalized_metrics = {}
+    for key in metric_keys:
+        try:
+            normalized_metrics[key] = float(raw_metrics.get(key, 0.0))
+        except (TypeError, ValueError):
+            normalized_metrics[key] = 0.0
+
+    try:
+        train_rows = int(raw_info.get("train_rows", 0))
+    except (TypeError, ValueError):
+        train_rows = 0
+    try:
+        test_rows = int(raw_info.get("test_rows", 0))
+    except (TypeError, ValueError):
+        test_rows = 0
+    try:
+        positive_rate_train = float(raw_info.get("target_positive_rate_train", 0.0))
+    except (TypeError, ValueError):
+        positive_rate_train = 0.0
+    try:
+        positive_rate_test = float(raw_info.get("target_positive_rate_test", 0.0))
+    except (TypeError, ValueError):
+        positive_rate_test = 0.0
+
+    return {
+        "train_rows": train_rows,
+        "test_rows": test_rows,
+        "target_positive_rate_train": positive_rate_train,
+        "target_positive_rate_test": positive_rate_test,
+        "metrics_test": normalized_metrics,
     }
+
+
+@st.cache_resource(show_spinner=False)
+def load_model_bundle(df: pd.DataFrame, model_bundle_path: Path, model_bundle_mtime_ns: int) -> dict:
+    _ = model_bundle_mtime_ns  # forca invalidacao do cache quando o artefato mudar
+
+    with model_bundle_path.open("rb") as file:
+        bundle = pickle.load(file)
+
+    if not isinstance(bundle, dict):
+        raise ValueError("Artefato invalido: o arquivo de modelo nao contem um dicionario de configuracao.")
+
+    pipeline = bundle.get("pipeline")
+    if pipeline is None or not hasattr(pipeline, "predict_proba"):
+        raise ValueError("Artefato invalido: pipeline ausente ou sem suporte a `predict_proba`.")
+
+    model = getattr(pipeline, "named_steps", {}).get("model")
+    if model is None:
+        model = pipeline
+
+    feature_columns = [str(col) for col in bundle.get("feature_columns", [])]
+    numeric_features = [str(col) for col in bundle.get("numeric_features", [])]
+    categorical_features = [str(col) for col in bundle.get("categorical_features", [])]
+    if not feature_columns:
+        raise ValueError("Artefato invalido: `feature_columns` ausente ou vazio.")
+
+    labeled_df = _prepare_model_dataframe(df)
+    reference_df = labeled_df if not labeled_df.empty else df.copy()
+    for col in feature_columns:
+        if col not in reference_df.columns:
+            reference_df[col] = np.nan
+
+    default_inputs = bundle.get("default_inputs")
+    if not isinstance(default_inputs, dict):
+        default_inputs = {}
+    default_inputs = default_inputs.copy()
+    for col in feature_columns:
+        if col in default_inputs:
+            continue
+        if col in numeric_features:
+            series = pd.to_numeric(reference_df[col], errors="coerce").dropna()
+            default_inputs[col] = float(series.median()) if not series.empty else 0.0
+        else:
+            mode_series = reference_df[col].dropna().astype(str)
+            default_inputs[col] = mode_series.mode().iloc[0] if not mode_series.empty else "Nao informado"
+
+    category_options = bundle.get("category_options")
+    if not isinstance(category_options, dict):
+        category_options = {}
+    normalized_options: dict[str, list[str]] = {}
+    for col in categorical_features:
+        options = category_options.get(col, [])
+        if not isinstance(options, list):
+            options = []
+        options = [str(option) for option in options]
+        if not options:
+            options = sorted(reference_df[col].dropna().astype(str).unique().tolist())
+        default_value = str(default_inputs.get(col, "Nao informado"))
+        if default_value and default_value not in options:
+            options = [default_value] + options
+        normalized_options[col] = options
+
+    computed_limits = _build_numeric_limits(reference_df, numeric_features)
+    numeric_limits_raw = bundle.get("numeric_limits")
+    if not isinstance(numeric_limits_raw, dict):
+        numeric_limits_raw = {}
+    numeric_limits = {}
+    for col in numeric_features:
+        raw_limits = numeric_limits_raw.get(col)
+        if isinstance(raw_limits, dict) and "min" in raw_limits and "max" in raw_limits:
+            try:
+                min_v = float(raw_limits["min"])
+                max_v = float(raw_limits["max"])
+                if min_v < max_v:
+                    numeric_limits[col] = {"min": min_v, "max": max_v}
+                    continue
+            except (TypeError, ValueError):
+                pass
+        numeric_limits[col] = computed_limits[col]
+
+    feature_importance = _normalize_feature_importance(bundle)
+    if not feature_importance and hasattr(model, "feature_importances_"):
+        preprocessor = pipeline.named_steps.get("preprocessor")
+        if preprocessor is not None and hasattr(preprocessor, "get_feature_names_out"):
+            transformed_names = preprocessor.get_feature_names_out()
+            importances = np.asarray(model.feature_importances_, dtype=float)
+            importance_df = pd.DataFrame({"feature_transformada": transformed_names, "importancia": importances})
+            importance_df["feature_original"] = importance_df["feature_transformada"].apply(
+                lambda value: _feature_name_to_original(value, categorical_features)
+            )
+            importance_df = (
+                importance_df.groupby("feature_original", as_index=False)["importancia"]
+                .sum()
+                .sort_values("importancia", ascending=False)
+                .reset_index(drop=True)
+            )
+            total_imp = float(importance_df["importancia"].sum())
+            importance_df["importancia"] = importance_df["importancia"] / total_imp if total_imp > 0 else 0.0
+            feature_importance = importance_df.to_dict(orient="records")
+
+    try:
+        threshold = float(bundle.get("threshold", 0.5))
+    except (TypeError, ValueError):
+        threshold = 0.5
+
+    risk_bands_raw = bundle.get("risk_bands")
+    if not isinstance(risk_bands_raw, dict):
+        risk_bands_raw = {}
+    try:
+        baixo_max = float(risk_bands_raw.get("baixo_max", max(0.20, threshold - 0.15)))
+    except (TypeError, ValueError):
+        baixo_max = float(max(0.20, threshold - 0.15))
+    try:
+        alto_min = float(risk_bands_raw.get("alto_min", threshold))
+    except (TypeError, ValueError):
+        alto_min = float(threshold)
+    risk_bands = {"baixo_max": baixo_max, "alto_min": alto_min}
+
+    target_rule = bundle.get("target_rule")
+    if target_rule is None:
+        target_rule = "Risco = 1 se (IAN t+1 <= 5,0)."
+
+    raw_model_hyperparameters: dict[str, object] = {}
+    if hasattr(model, "get_params"):
+        try:
+            raw_model_hyperparameters = dict(model.get_params())
+        except Exception:
+            raw_model_hyperparameters = {}
+
+    model_info = bundle.get("model_info")
+    if not isinstance(model_info, dict):
+        model_info = {}
+    try:
+        recall_objective = float(model_info.get("recall_objective", RECALL_OBJECTIVE))
+    except (TypeError, ValueError):
+        recall_objective = float(RECALL_OBJECTIVE)
+    try:
+        threshold_grid_min = float(model_info.get("threshold_grid_min", float(np.min(THRESHOLD_GRID))))
+    except (TypeError, ValueError):
+        threshold_grid_min = float(np.min(THRESHOLD_GRID))
+    try:
+        threshold_grid_max = float(model_info.get("threshold_grid_max", float(np.max(THRESHOLD_GRID))))
+    except (TypeError, ValueError):
+        threshold_grid_max = float(np.max(THRESHOLD_GRID))
+    model_info = {
+        "algorithm": model_info.get("algorithm", type(model).__name__),
+        "hyperparameters": model_info.get(
+            "hyperparameters",
+            raw_model_hyperparameters,
+        ),
+        "recall_objective": recall_objective,
+        "threshold_grid_min": threshold_grid_min,
+        "threshold_grid_max": threshold_grid_max,
+    }
+
+    popover_info = bundle.get("popover_info")
+    if not isinstance(popover_info, dict):
+        popover_info = {}
 
     return {
         "pipeline": pipeline,
-        "threshold": float(threshold),
+        "threshold": threshold,
         "risk_bands": risk_bands,
         "feature_columns": feature_columns,
         "numeric_features": numeric_features,
         "categorical_features": categorical_features,
-        "default_inputs": {**default_numeric, **default_categorical},
-        "category_options": category_options,
+        "default_inputs": default_inputs,
+        "category_options": normalized_options,
         "numeric_limits": numeric_limits,
-        "feature_importance": importance_df.to_dict(orient="records"),
-        "target_rule": "Risco = 1 se (IAN t+1 <= 5,0) ou (queda de IAN >= 1 ponto no próximo ciclo). Predição antecipada — usa dados do ciclo atual para estimar risco no próximo.",
-        "model_info": {
-            "algorithm": "RandomForestClassifier",
-            "hyperparameters": model_hyperparameters,
-            "recall_objective": float(RECALL_OBJECTIVE),
-            "threshold_grid_min": float(np.min(THRESHOLD_GRID)),
-            "threshold_grid_max": float(np.max(THRESHOLD_GRID)),
-        },
-        "training_info": {
-            "train_rows": int(len(train_df)),
-            "test_rows": int(len(test_df)),
-            "target_positive_rate_train": float(y_train.mean()),
-            "target_positive_rate_test": float(y_test.mean()),
-            "metrics_test": metrics,
-        },
+        "feature_importance": feature_importance,
+        "target_rule": target_rule,
+        "model_info": model_info,
+        "training_info": _normalize_training_info(bundle),
+        "popover_info": popover_info,
+        "model_source_path": str(model_bundle_path),
+        "model_name": str(bundle.get("model_name", model_info.get("algorithm", "Modelo"))),
     }
-
 
 def _risk_level(probability: float) -> str:
     value = probability * 100
@@ -631,12 +759,16 @@ def _render_result_card(probability: float, level: str, dimension_message: str) 
 
 def _render_feature_importance(bundle: dict) -> None:
     importance_df = pd.DataFrame(bundle["feature_importance"]).head(8).copy()
-    if importance_df.empty:
+    required_cols = {"feature_original", "importancia"}
+    if importance_df.empty or not required_cols.issubset(set(importance_df.columns)):
         return
 
     importance_df["variavel"] = importance_df["feature_original"].map(FEATURE_LABELS).fillna(importance_df["feature_original"])
     importance_df["importancia_pct"] = importance_df["importancia"] * 100
-    st.markdown("**Variáveis mais influentes no modelo (Random Forest)**")
+    model_label = str(bundle.get("model_name", "")).strip()
+    if not model_label:
+        model_label = str(bundle.get("model_info", {}).get("algorithm", "Modelo"))
+    st.markdown(f"**Variáveis mais influentes no modelo ({model_label})**")
     st.bar_chart(
         importance_df.set_index("variavel")["importancia_pct"],
         height=260,
@@ -920,6 +1052,11 @@ def _render_technical_popover(bundle: dict) -> None:
     metrics = info["metrics_test"]
     model_info = bundle.get("model_info", {})
     model_hyperparameters = model_info.get("hyperparameters", {})
+    popover_info = bundle.get("popover_info", {})
+    train_label = str(popover_info.get("train_label", "Treino (2022)"))
+    test_label = str(popover_info.get("test_label", "Teste temporal (2023)"))
+    threshold_note = popover_info.get("threshold_selection_criterion")
+    model_selection_note = popover_info.get("model_selection_criterion")
 
     with st.popover("ℹ️", help="Detalhes técnicos do modelo"):
         st.markdown("**Detalhes técnicos do modelo**")
@@ -929,11 +1066,11 @@ def _render_technical_popover(bundle: dict) -> None:
         st.write(bundle["target_rule"])
 
         st.markdown("**Amostras usadas no treinamento**")
-        st.write(f"Treino (2022): {info['train_rows']:,}".replace(",", "."))
-        st.write(f"Teste temporal (2023): {info['test_rows']:,}".replace(",", "."))
+        st.write(f"{train_label}: {info['train_rows']:,}".replace(",", "."))
+        st.write(f"{test_label}: {info['test_rows']:,}".replace(",", "."))
 
         st.markdown("**Parâmetros do modelo**")
-        st.write(f"Algoritmo: {model_info.get('algorithm', 'RandomForestClassifier')}")
+        st.write(f"Algoritmo: {model_info.get('algorithm', bundle.get('model_name', 'Modelo'))}")
         if model_hyperparameters:
             params_df = pd.DataFrame(
                 {
@@ -943,12 +1080,16 @@ def _render_technical_popover(bundle: dict) -> None:
             )
             st.dataframe(params_df, hide_index=True, width="stretch")
         st.write(f"Threshold final de classificação: {bundle['threshold']:.3f}")
-        if model_info:
+        if threshold_note:
+            st.caption(str(threshold_note))
+        elif model_info:
             st.caption(
                 f"Threshold escolhido via OOF com objetivo de recall >= {model_info.get('recall_objective', RECALL_OBJECTIVE):.2f}, "
                 f"avaliando grade de {model_info.get('threshold_grid_min', float(np.min(THRESHOLD_GRID))):.2f} "
                 f"a {model_info.get('threshold_grid_max', float(np.max(THRESHOLD_GRID))):.2f}."
             )
+        if model_selection_note:
+            st.caption(str(model_selection_note))
 
         st.markdown("**Desempenho no teste temporal (2023)**")
         c1, c2 = st.columns(2)
@@ -971,7 +1112,12 @@ def _render_technical_popover(bundle: dict) -> None:
 
 def render_modelo_preditivo_tab(df: pd.DataFrame) -> None:
     try:
-        bundle = train_random_forest_bundle(df)
+        model_bundle_path = _resolve_model_bundle_path()
+        bundle = load_model_bundle(
+            df=df,
+            model_bundle_path=model_bundle_path,
+            model_bundle_mtime_ns=model_bundle_path.stat().st_mtime_ns,
+        )
     except Exception as error:
         st.error(f"Falha ao preparar o modelo preditivo: {error}")
         st.stop()
@@ -1373,4 +1519,5 @@ def render_modelo_preditivo_tab(df: pd.DataFrame) -> None:
 
     _render_probability_gauge(probability)
     _render_result_card(probability, level, dimension_message)
+
 
