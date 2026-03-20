@@ -331,15 +331,24 @@ def train_random_forest_bundle(df: pd.DataFrame) -> dict:
     )
 
     model = RandomForestClassifier(
-        n_estimators=400,
-        max_depth=6,
-        min_samples_split=30,
-        min_samples_leaf=14,
+        n_estimators=500,
+        max_depth=None,
+        min_samples_split=20,
+        min_samples_leaf=4,
         max_features="sqrt",
         class_weight="balanced_subsample",
         random_state=RANDOM_STATE,
         n_jobs=1,
     )
+    model_hyperparameters = {
+        "n_estimators": 500,
+        "max_depth": None,
+        "min_samples_split": 20,
+        "min_samples_leaf": 4,
+        "max_features": "sqrt",
+        "class_weight": "balanced_subsample",
+        "random_state": RANDOM_STATE,
+    }
     pipeline = Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
 
     cv = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_STATE)
@@ -421,6 +430,13 @@ def train_random_forest_bundle(df: pd.DataFrame) -> dict:
         "numeric_limits": numeric_limits,
         "feature_importance": importance_df.to_dict(orient="records"),
         "target_rule": "Risco = 1 se (IAN t+1 <= 5,0) ou (queda de IAN >= 1 ponto no próximo ciclo). Predição antecipada — usa dados do ciclo atual para estimar risco no próximo.",
+        "model_info": {
+            "algorithm": "RandomForestClassifier",
+            "hyperparameters": model_hyperparameters,
+            "recall_objective": float(RECALL_OBJECTIVE),
+            "threshold_grid_min": float(np.min(THRESHOLD_GRID)),
+            "threshold_grid_max": float(np.max(THRESHOLD_GRID)),
+        },
         "training_info": {
             "train_rows": int(len(train_df)),
             "test_rows": int(len(test_df)),
@@ -902,6 +918,8 @@ def _render_probability_gauge(probability: float) -> None:
 def _render_technical_popover(bundle: dict) -> None:
     info = bundle["training_info"]
     metrics = info["metrics_test"]
+    model_info = bundle.get("model_info", {})
+    model_hyperparameters = model_info.get("hyperparameters", {})
 
     with st.popover("ℹ️", help="Detalhes técnicos do modelo"):
         st.markdown("**Detalhes técnicos do modelo**")
@@ -913,6 +931,24 @@ def _render_technical_popover(bundle: dict) -> None:
         st.markdown("**Amostras usadas no treinamento**")
         st.write(f"Treino (2022): {info['train_rows']:,}".replace(",", "."))
         st.write(f"Teste temporal (2023): {info['test_rows']:,}".replace(",", "."))
+
+        st.markdown("**Parâmetros do modelo**")
+        st.write(f"Algoritmo: {model_info.get('algorithm', 'RandomForestClassifier')}")
+        if model_hyperparameters:
+            params_df = pd.DataFrame(
+                {
+                    "Parâmetro": list(model_hyperparameters.keys()),
+                    "Valor": [str(value) for value in model_hyperparameters.values()],
+                }
+            )
+            st.dataframe(params_df, hide_index=True, width="stretch")
+        st.write(f"Threshold final de classificação: {bundle['threshold']:.3f}")
+        if model_info:
+            st.caption(
+                f"Threshold escolhido via OOF com objetivo de recall >= {model_info.get('recall_objective', RECALL_OBJECTIVE):.2f}, "
+                f"avaliando grade de {model_info.get('threshold_grid_min', float(np.min(THRESHOLD_GRID))):.2f} "
+                f"a {model_info.get('threshold_grid_max', float(np.max(THRESHOLD_GRID))):.2f}."
+            )
 
         st.markdown("**Desempenho no teste temporal (2023)**")
         c1, c2 = st.columns(2)
