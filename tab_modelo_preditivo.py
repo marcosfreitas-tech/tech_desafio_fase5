@@ -1059,27 +1059,103 @@ def _render_technical_popover(bundle: dict) -> None:
     model_selection_note = popover_info.get("model_selection_criterion")
 
     with st.popover("ℹ️", help="Detalhes técnicos do modelo"):
+        def _format_key_label(raw_key: str) -> str:
+            label = str(raw_key).replace("_", " ").strip().title()
+            replacements = {
+                "Ian": "IAN",
+                "Ida": "IDA",
+                "Ieg": "IEG",
+                "Iaa": "IAA",
+                "Ips": "IPS",
+                "Ipp": "IPP",
+                "Ipv": "IPV",
+                "Pr": "PR",
+                "Roc": "ROC",
+            }
+            for old, new in replacements.items():
+                label = label.replace(old, new)
+            return label
+
+        def _format_value(value: object) -> str:
+            if value is None:
+                return "-"
+            if isinstance(value, bool):
+                return "Sim" if value else "Não"
+            if isinstance(value, (int, np.integer)):
+                return f"{int(value)}"
+            if isinstance(value, (float, np.floating)):
+                if np.isnan(value):
+                    return "-"
+                if float(value).is_integer():
+                    return f"{int(value)}"
+                return f"{float(value):.4g}"
+            return str(value)
+
         st.markdown("**Detalhes técnicos do modelo**")
         st.caption("Seção de apoio para leitura analítica. O uso operacional está no formulário principal.")
 
         st.markdown("**Regra de definição do risco**")
-        st.write(bundle["target_rule"])
+        target_rule = bundle.get("target_rule")
+        if isinstance(target_rule, dict):
+            description = target_rule.get("description")
+            if description:
+                st.write(str(description))
+
+            threshold_items = []
+            for key, value in target_rule.items():
+                if str(key).lower() == "description":
+                    continue
+                if "threshold" in str(key).lower():
+                    threshold_items.append((str(key), value))
+
+            if threshold_items:
+                cols = st.columns(min(3, len(threshold_items)))
+                for idx, (key, value) in enumerate(threshold_items):
+                    with cols[idx % len(cols)]:
+                        st.metric(_format_key_label(key), _format_value(value))
+
+            for key, value in target_rule.items():
+                if str(key).lower() == "description" or (isinstance(key, str) and "threshold" in key.lower()):
+                    continue
+                st.caption(f"{_format_key_label(str(key))}: {_format_value(value)}")
+        else:
+            st.write(str(target_rule))
 
         st.markdown("**Amostras usadas no treinamento**")
         st.write(f"{train_label}: {info['train_rows']:,}".replace(",", "."))
         st.write(f"{test_label}: {info['test_rows']:,}".replace(",", "."))
 
         st.markdown("**Parâmetros do modelo**")
-        st.write(f"Algoritmo: {model_info.get('algorithm', bundle.get('model_name', 'Modelo'))}")
+        model_algorithm = str(model_info.get("algorithm", bundle.get("model_name", "Modelo")))
+        c_model, c_threshold = st.columns(2)
+        with c_model:
+            st.metric("Algoritmo", model_algorithm)
+        with c_threshold:
+            st.metric("Threshold final", f"{bundle['threshold']:.3f}")
+
         if model_hyperparameters:
-            params_df = pd.DataFrame(
-                {
-                    "Parâmetro": list(model_hyperparameters.keys()),
-                    "Valor": [str(value) for value in model_hyperparameters.values()],
-                }
-            )
-            st.dataframe(params_df, hide_index=True, width="stretch")
-        st.write(f"Threshold final de classificação: {bundle['threshold']:.3f}")
+            preferred_order = [
+                "n_estimators",
+                "max_depth",
+                "learning_rate",
+                "min_samples_split",
+                "min_samples_leaf",
+                "subsample",
+                "colsample_bytree",
+                "max_features",
+                "class_weight",
+                "random_state",
+            ]
+            shown_keys: list[str] = [key for key in preferred_order if key in model_hyperparameters]
+            if not shown_keys:
+                shown_keys = list(model_hyperparameters.keys())[:8]
+
+            c_left, c_right = st.columns(2)
+            for idx, key in enumerate(shown_keys):
+                col = c_left if idx % 2 == 0 else c_right
+                with col:
+                    st.metric(_format_key_label(key), _format_value(model_hyperparameters.get(key)))
+
         if threshold_note:
             st.caption(str(threshold_note))
         elif model_info:
@@ -1360,7 +1436,7 @@ def render_modelo_preditivo_tab(df: pd.DataFrame) -> None:
         submitted = st.form_submit_button(
             "Calcular indicadores e probabilidade de risco de defasagem",
             type="primary",
-            use_container_width=True,
+            width="stretch",
         )
 
         if not submitted:

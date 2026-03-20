@@ -52,7 +52,7 @@ def render_dicionario_tab() -> None:
         data=pdf_bytes,
         file_name=DICIONARIO_PDF_PATH.name,
         mime="application/pdf",
-        use_container_width=True,
+        width="stretch",
     )
 
     if fitz is None:
@@ -76,5 +76,5 @@ def render_dicionario_tab() -> None:
         with col_center:
             st.image(
                 page_image,
-                use_container_width=True,
+                width="stretch",
             )

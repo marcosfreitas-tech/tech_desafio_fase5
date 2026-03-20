@@ -266,7 +266,7 @@ def plotly_chart_numbered(
         title_prefix = f"Gráfico {graph_number}"
         fig.update_layout(title=f"{title_prefix} - {current_title}" if current_title else title_prefix)
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     if note:
         show_caption(f"Referência: Gráfico {graph_number}. {note}")
     else:
@@ -699,7 +699,7 @@ def render_q1(df: pd.DataFrame) -> dict[str, int]:
     age_analysis["faixa_etaria"] = pd.cut(age_analysis["idade"], bins=[0, 10, 13, 16, 30], labels=["7-10 anos", "11-13 anos", "14-16 anos", "17+ anos"])
     ian_by_age = (
         age_analysis.dropna(subset=["faixa_etaria"])
-        .groupby(["ano_referencia", "faixa_etaria"], as_index=False)
+        .groupby(["ano_referencia", "faixa_etaria"], as_index=False, observed=False)
         .agg(
             ian_medio=("ian", "mean"),
             percentual_defasagem_alta=("ian", lambda s: (s <= 5).mean() * 100),
@@ -1381,7 +1381,7 @@ def render_q8(df: pd.DataFrame) -> tuple[pd.DataFrame, int | None]:
         profile_df[f"{col}_faixa"] = pd.qcut(profile_df[col], q=3, labels=["Baixo", "Intermediario", "Alto"], duplicates="drop")
 
     profile_summary = (
-        profile_df.groupby(["ida_faixa", "ieg_faixa", "ips_faixa", "ipp_faixa"], as_index=False)
+        profile_df.groupby(["ida_faixa", "ieg_faixa", "ips_faixa", "ipp_faixa"], as_index=False, observed=False)
         .agg(media_inde=("inde_ano", "mean"), alunos=("ra", "nunique"))
         .sort_values(["media_inde", "alunos"], ascending=[False, False])
     )
@@ -1433,9 +1433,13 @@ def render_q9(df_long: pd.DataFrame) -> dict | None:
     test_scored = X_test.copy()
     test_scored["prob_risco"] = prob_test
     test_scored["risco_real"] = y_test.values
-    bins = pd.cut(test_scored["prob_risco"], bins=[0, 0.2, 0.4, 0.6, 0.8, 1.0], include_lowest=True)
+    test_scored["faixa_prob"] = pd.cut(
+        test_scored["prob_risco"],
+        bins=[0, 0.2, 0.4, 0.6, 0.8, 1.0],
+        include_lowest=True,
+    )
     calibration = (
-        test_scored.groupby(bins, as_index=False)
+        test_scored.groupby("faixa_prob", as_index=False, observed=False)
         .agg(alunos=("risco_real", "size"), taxa_real=("risco_real", "mean"), prob_media=("prob_risco", "mean"))
     )
     calibration["taxa_real"] = calibration["taxa_real"] * 100
