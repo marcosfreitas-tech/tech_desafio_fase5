@@ -37,7 +37,6 @@ Apoiar decisoes preventivas da ONG com:
 |-- scripts/
 |   |-- 1_EDA_e_Storytelling.ipynb
 |   |-- 2_Modelo_Preditivo.ipynb
-|   `-- _eda_cells_dump.txt
 |-- artifacts/
 |   |-- feature_importance.csv
 |   |-- feature_importance_all_models.csv
